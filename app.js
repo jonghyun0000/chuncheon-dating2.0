@@ -1,12 +1,12 @@
 /**
  * app.js — 춘천 과팅 메인 애플리케이션
- * v2.2 업데이트: 이메일 도메인 검증 우회(.com) 및 비로그인 입금버튼 관리자 우회 적용
+ * v2.3 업데이트: 입금 완료 후 검토중(Pending) 화면으로 이동하도록 흐름 정상화
  */
 
 'use strict';
 
 // ============================================================
-// 1. Supabase 클라이언트 초기화 (config.js의 값 사용)
+// 1. Supabase 클라이언트 초기화
 // ============================================================
 const cfg = window.__ENV__;
 
@@ -28,7 +28,7 @@ const _sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY
 });
 
 // ============================================================
-// 2. 전역 상태 (단일 진실 원천)
+// 2. 전역 상태
 // ============================================================
 const state = {
   authUser:      null,
@@ -81,7 +81,7 @@ function setBtnLoading(id, loading, originalText) {
 }
 
 // ============================================================
-// 5. 화면 전환 (보호 라우팅 포함)
+// 5. 화면 전환
 // ============================================================
 const PROTECTED_SCREENS = new Set([
   'screen-team-register','screen-apply','screen-requests',
@@ -159,7 +159,7 @@ function showAuthGateModal(action) {
 window.showAuthGateModal = showAuthGateModal;
 
 // ============================================================
-// 8. 앱 초기화 (세션 복원)
+// 8. 앱 초기화
 // ============================================================
 async function initApp() {
   try {
@@ -230,9 +230,7 @@ async function doLogin() {
 
   setBtnLoading('btn-login', true, '로그인');
   try {
-    // ★ 수정: .local 도메인을 .com으로 변경하여 Supabase 이메일 검증 에러 방지
     const email = `${usernameRaw}@chuncheon-dating.com`;
-
     const { data, error } = await _sb.auth.signInWithPassword({ email, password });
 
     if (error) {
@@ -282,9 +280,7 @@ async function doAdminLogin() {
 
   setBtnLoading('btn-admin-login', true, '관리자 로그인');
   try {
-    // ★ 수정: .local 도메인을 .com으로 변경
     const email = `${usernameRaw}@chuncheon-dating.com`;
-
     const { data, error } = await _sb.auth.signInWithPassword({ email, password });
     if (error) throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
 
@@ -442,7 +438,6 @@ async function submitVerification() {
 
   setBtnLoading('btn-verify', true, '업로드 완료');
   try {
-    // ★ 수정: .local 도메인을 .com으로 변경하여 이메일 유효성 검사 통과
     const email = `${d.username}@chuncheon-dating.com`;
     const { data: authData, error: authErr } = await _sb.auth.signUp({
       email, password: d.password,
@@ -496,8 +491,10 @@ async function submitVerification() {
     state.profile = profile;
     state.regData = null;
     setText('home-username', profile.nickname + '님');
-    showToast('🎉 가입 완료! 학생증 검토 후 알림드릴게요');
-    showScreen('screen-deposit');
+    
+    // ★ 변경: 학생증 업로드 직후 안내 메시지 직관적으로 수정
+    showToast('🎉 학생증 업로드 완료! 이어서 입금을 진행해주세요.');
+    showScreen('screen-deposit'); // 업로드 후 무조건 입금 화면으로 이동
 
   } catch(err) {
     showToast('❌ ' + err.message);
@@ -513,9 +510,10 @@ window.submitVerification = submitVerification;
 async function submitDeposit() {
   const profile = state.profile;
   
-  // ★ 수정: 로그인이 안된 상태에서 버튼을 누르면 관리자 로그인 화면으로 즉시 이동
+  // ★ 변경: 세션 만료 등의 이유로 비로그인 상태일 때 로그인 화면으로 안내
   if (!profile) {
-    showScreen('screen-admin-login');
+    showToast('로그인이 필요합니다. 처음부터 다시 진행해주세요.');
+    showScreen('screen-login');
     return;
   }
 
@@ -532,8 +530,10 @@ async function submitDeposit() {
     );
     if (error) throw new Error('입금 신청 저장 실패: ' + error.message);
 
-    showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
-    showScreen('screen-pending');
+    // ★ 변경: 입금 완료 후 '검토중입니다' 화면(screen-pending)으로 이동
+    showToast('💳 입금 확인이 요청되었습니다!');
+    showScreen('screen-pending'); 
+
   } catch(err) {
     showToast('❌ ' + err.message);
   } finally {
@@ -940,7 +940,7 @@ async function acceptMatchRequest(requestId) {
       status: 'matched', responded_at: new Date().toISOString()
     }).eq('id', requestId);
 
-    showToast('🎉 수락했습니다! 매칭이 성사되었어요');
+    showToast('🎉 수락했습니다! 매칭 성사되었어요');
     showScreen('screen-match-success');
   } catch(err) {
     showToast('❌ ' + err.message);
