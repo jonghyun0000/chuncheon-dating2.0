@@ -1,6 +1,7 @@
 /**
  * app.js — 춘천 과팅 메인 애플리케이션
  * v2.0 전면 재작성: 실제 Supabase Auth 기반 인증, XSS 방어, RLS 연동
+ * v2.1 업데이트: 조인 외래키 명시, 카카오링크 검증, Auth 세션 예외 처리 강화
  */
 
 'use strict';
@@ -39,6 +40,7 @@ const state = {
   regData:       null,   // 회원가입 임시 데이터
   uploadedFile:  null    // 학생증 파일 객체
 };
+window.state = state;
 
 // ============================================================
 // 3. XSS 방어 유틸 (innerHTML 사용 시 반드시 통과)
@@ -466,10 +468,19 @@ async function submitVerification() {
       email, password: d.password,
       options: { data: { username: d.username } }
     });
+
     if (authErr) {
-      if (authErr.message.includes('already registered')) throw new Error('이미 사용 중인 아이디입니다.');
+      if (authErr.message.includes('already registered') || authErr.message.includes('User already registered')) {
+        throw new Error('이미 사용 중인 아이디입니다. 다른 아이디를 입력해주세요.');
+      }
       throw new Error('계정 생성 실패: ' + authErr.message);
     }
+    
+    // ★ 추가된 방어 로직: 세션 생성 여부 확인 (이메일 인증 충돌 방지)
+    if (!authData.session) {
+      throw new Error('이메일 인증 설정 충돌입니다. Supabase 대시보드에서 Confirm Email 설정을 OFF로 변경하세요.');
+    }
+
     const authId = authData.user?.id;
     if (!authId) throw new Error('계정 생성 중 오류가 발생했습니다.');
 
@@ -786,7 +797,13 @@ async function registerTeam() {
     });
   }
 
-  const kakaoLink = document.getElementById('kakao-link')?.value.trim() || null;
+  // ★ 수정 3: 빈 문자열을 null로 변환 및 유효성 검사 적용
+  let kakaoLink = document.getElementById('kakao-link')?.value.trim();
+  if (kakaoLink === '') kakaoLink = null;
+  if (kakaoLink && !kakaoLink.startsWith('https://')) {
+    showToast('카카오톡 링크는 https:// 로 시작해야 합니다');
+    return;
+  }
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
@@ -1198,11 +1215,11 @@ async function switchAdminTab(tab, el) {
   if (!container) return;
   container.innerHTML = '<div style="padding:24px;text-align:center;"><div class="spinner"></div></div>';
 
-  // ── 회원 목록
+  // ── 회원 목록 (★ 수정 1: 외래키 충돌 방지를 위해 테이블 명시)
   if (tab === 'users') {
     const { data: users, error } = await _sb
       .from('users')
-      .select('*, student_verifications(status), deposits(status,amount,depositor_name)')
+      .select('*, student_verifications!student_verifications_user_id_fkey(status), deposits!deposits_user_id_fkey(status,amount,depositor_name)')
       .is('deleted_at', null)
       .order('created_at', { ascending: false });
 
@@ -1445,13 +1462,13 @@ function filterAdminUsers(q) {
 }
 window.filterAdminUsers = filterAdminUsers;
 
-// 관리자 회원 상세
+// 관리자 회원 상세 (★ 수정 2: 외래키 충돌 방지를 위해 테이블 명시)
 async function openAdminUserDetail(userId) {
   try { assertAdmin(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
 
   const { data: u } = await _sb.from('users')
-    .select('*, student_verifications(*), deposits(*)')
+    .select('*, student_verifications!student_verifications_user_id_fkey(*), deposits!deposits_user_id_fkey(*)')
     .eq('id', userId).single();
   if (!u) return;
 
@@ -1868,9 +1885,6 @@ function showTerms(type) {
   document.getElementById('modal-terms')?.classList.add('show');
 }
 window.showTerms = showTerms;
-
-function showWithdraw() { document.getElementById('modal-withdraw')?.classList.add('show'); }
-window.showWithdraw = showWithdraw;
 
 function confirmUnverifiedTeam() { closeModal('team-unverified-confirm'); }
 window.confirmUnverifiedTeam = confirmUnverifiedTeam;
