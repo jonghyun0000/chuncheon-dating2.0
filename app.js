@@ -1,6 +1,6 @@
 /**
  * app.js — 춘천 과팅 메인 애플리케이션
- * v2.3 업데이트: 입금 완료 후 검토중(Pending) 화면으로 이동하도록 흐름 정상화
+ * v2.4 업데이트: 관리자 로그인(john1217) 자동 복구 기능 추가 및 입금->검토중 흐름 보장
  */
 
 'use strict';
@@ -218,7 +218,7 @@ function enterAuthenticatedApp() {
 }
 
 // ============================================================
-// 9. 로그인
+// 9. 일반 사용자 로그인
 // ============================================================
 async function doLogin() {
   const usernameRaw = document.getElementById('login-id')?.value.trim();
@@ -236,9 +236,6 @@ async function doLogin() {
     if (error) {
       if (error.message.toLowerCase().includes('invalid login')) {
         throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
-      }
-      if (error.message.toLowerCase().includes('email not confirmed')) {
-        throw new Error('이메일 인증이 필요합니다. 관리자에게 문의하세요.');
       }
       throw new Error('로그인 실패: ' + error.message);
     }
@@ -270,7 +267,7 @@ async function doLogin() {
 window.doLogin = doLogin;
 
 // ============================================================
-// 10. 관리자 로그인
+// 10. ★ 관리자 로그인 (자동 복구 로직 포함) ★
 // ============================================================
 async function doAdminLogin() {
   const usernameRaw = document.getElementById('admin-id')?.value.trim();
@@ -280,20 +277,70 @@ async function doAdminLogin() {
 
   setBtnLoading('btn-admin-login', true, '관리자 로그인');
   try {
-    const email = `${usernameRaw}@chuncheon-dating.com`;
-    const { data, error } = await _sb.auth.signInWithPassword({ email, password });
-    if (error) throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
+    let email = `${usernameRaw}@chuncheon-dating.com`;
+    let authRes = await _sb.auth.signInWithPassword({ email, password });
 
-    const profile = await loadProfile(data.user.id);
-    if (!profile) {
-      await _sb.auth.signOut();
-      throw new Error('사용자 정보를 찾을 수 없습니다.');
+    // [자동 복구 1단계] 인증 실패 및 john1217 계정인 경우
+    if (authRes.error && usernameRaw === 'john1217' && password === 'king1217') {
+      // 혹시 .local 로 가입되어 있는지 재확인
+      email = `${usernameRaw}@chuncheon-dating.local`;
+      authRes = await _sb.auth.signInWithPassword({ email, password });
+      
+      // 그래도 안 되면 아예 Auth 계정이 없는 상태이므로 강제 가입 처리
+      if (authRes.error) {
+        const { data: signUpData, error: signUpErr } = await _sb.auth.signUp({ email, password });
+        if (signUpErr) throw new Error('관리자 계정 복구 실패: ' + signUpErr.message);
+        
+        showToast('🔄 관리자 계정 초기화가 완료되었습니다. 다시 로그인 버튼을 눌러주세요.');
+        setBtnLoading('btn-admin-login', false, '관리자 로그인');
+        return; // 1회 중단하고 다시 누르도록 유도
+      }
+    } else if (authRes.error) {
+      throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
     }
 
-    if (profile.role !== 'admin') {
+    const authUser = authRes.data?.user;
+    if (!authUser) throw new Error('인증 정보를 불러올 수 없습니다.');
+
+    let profile = await loadProfile(authUser.id);
+
+    // [자동 복구 2단계] 로그인은 되었으나 users 테이블과 UUID가 끊어진 경우 강제 매핑
+    if (!profile && usernameRaw === 'john1217') {
+      // 꼬여있는 기존 john1217 데이터 삭제 (이름 중복 방지)
+      await _sb.from('users').delete().eq('username', 'john1217');
+
+      const { data: newAdmin, error: insertErr } = await _sb.from('users').insert({
+        auth_id: authUser.id,
+        username: 'john1217',
+        nickname: '최고관리자',
+        gender: 'male',
+        role: 'admin',
+        university: '운영진',
+        department: '시스템',
+        student_number: '00000000',
+        birth_year: 1990,
+        profile_active: true
+      }).select().single();
+
+      if (insertErr) throw new Error('관리자 DB 매핑 실패: ' + insertErr.message);
+      profile = newAdmin;
+    }
+
+    if (!profile) {
       await _sb.auth.signOut();
-      state.profile = null;
-      throw new Error('관리자 권한이 없습니다. 일반 회원 로그인 화면을 이용해주세요.');
+      throw new Error('사용자 DB 정보를 찾을 수 없습니다.');
+    }
+
+    // [자동 복구 3단계] 관리자인데 일반 권한(user)으로 되어있다면 강제 승격
+    if (profile.role !== 'admin') {
+      if (usernameRaw === 'john1217') {
+        await _sb.from('users').update({ role: 'admin' }).eq('id', profile.id);
+        profile.role = 'admin';
+      } else {
+        await _sb.auth.signOut();
+        state.profile = null;
+        throw new Error('관리자 권한이 없습니다. 일반 회원 화면을 이용해주세요.');
+      }
     }
 
     if (profile.is_banned) {
@@ -301,6 +348,7 @@ async function doAdminLogin() {
       throw new Error('이용이 제한된 계정입니다.');
     }
 
+    // 모든 과정 통과 시 관리자 화면 표시
     document.getElementById('admin-pw').value = '';
     showScreen('screen-admin');
     renderAdminDashboard();
@@ -422,7 +470,7 @@ async function goToVerification() {
 window.goToVerification = goToVerification;
 
 // ============================================================
-// 15. 학생증 업로드 + 회원가입 DB 저장
+// 15. 학생증 업로드 + DB 저장
 // ============================================================
 async function submitVerification() {
   const d = state.regData;
@@ -492,9 +540,9 @@ async function submitVerification() {
     state.regData = null;
     setText('home-username', profile.nickname + '님');
     
-    // ★ 변경: 학생증 업로드 직후 안내 메시지 직관적으로 수정
+    // ★ 업로드 성공 시 즉시 입금 화면으로 이동
     showToast('🎉 학생증 업로드 완료! 이어서 입금을 진행해주세요.');
-    showScreen('screen-deposit'); // 업로드 후 무조건 입금 화면으로 이동
+    showScreen('screen-deposit'); 
 
   } catch(err) {
     showToast('❌ ' + err.message);
@@ -505,15 +553,14 @@ async function submitVerification() {
 window.submitVerification = submitVerification;
 
 // ============================================================
-// 16. 입금 신청 → DB 저장
+// 16. 입금 완료 클릭 → 검토중(Pending) 화면으로 이동
 // ============================================================
 async function submitDeposit() {
   const profile = state.profile;
   
-  // ★ 변경: 세션 만료 등의 이유로 비로그인 상태일 때 로그인 화면으로 안내
   if (!profile) {
-    showToast('로그인이 필요합니다. 처음부터 다시 진행해주세요.');
-    showScreen('screen-login');
+    showToast('로그인이 필요합니다. 다시 로그인해주세요.');
+    showScreen('screen-landing');
     return;
   }
 
@@ -530,7 +577,7 @@ async function submitDeposit() {
     );
     if (error) throw new Error('입금 신청 저장 실패: ' + error.message);
 
-    // ★ 변경: 입금 완료 후 '검토중입니다' 화면(screen-pending)으로 이동
+    // ★ 입금 DB 저장 완료 시 '검토중입니다' 화면으로 이동
     showToast('💳 입금 확인이 요청되었습니다!');
     showScreen('screen-pending'); 
 
