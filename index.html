@@ -15,9 +15,6 @@
 <!-- ② 환경변수 (config.js에서 값 설정) -->
 <script src="./config.js"></script>
 
-<!-- Supabase JS SDK -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
 <!-- 환경변수는 config.js에서 window.__ENV__ 로 관리됩니다 -->
 <style>
   :root {
@@ -1453,8 +1450,8 @@
       </div>
 
       <div style="padding:0 16px 24px;display:flex;flex-direction:column;gap:10px;">
-        <button class="btn btn-primary" onclick="state.currentUser ? showScreen('screen-apply') : showAuthGateModal('apply')">💌 과팅 신청하기</button>
-        <button class="btn btn-outline" onclick="state.currentUser ? showToast('💬 메시지를 보내기 전 신청을 먼저 해주세요') : showAuthGateModal('message')">💬 채팅 먼저 하기</button>
+        <button class="btn btn-primary" onclick="state.profile ? showScreen('screen-apply') : showAuthGateModal('apply')">💌 과팅 신청하기</button>
+        <button class="btn btn-outline" onclick="state.profile ? showToast('💬 메시지를 보내기 전 신청을 먼저 해주세요') : showAuthGateModal('message')">💬 채팅 먼저 하기</button>
       </div>
     </div>
   </div>
@@ -2007,8 +2004,19 @@
         </p>
       </div>
       <div class="info-box" style="margin-bottom:16px;">
+        <span class="info-box-icon">📌</span>
+        <span>확인 후에도 최종 승인 여부는 관리자 검수 결과에 따라 결정됩니다.</span>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-outline" style="flex:1;" onclick="closeModal('team-unverified-confirm')">취소</button>
+        <button class="btn btn-primary" style="flex:1;" onclick="confirmUnverifiedTeam()">확인했어요</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ③ 메인 앱 스크립트 -->
-<script src="./app.js" type="module"></script>
+<script src="./app.js"></script>
 </body>
 </html>
