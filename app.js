@@ -1,12 +1,13 @@
 /**
  * app.js — 춘천 과팅 메인 애플리케이션
- * v2.4 업데이트: 관리자 로그인(john1217) 자동 복구 기능 추가 및 입금->검토중 흐름 보장
+ * v2.0 전면 재작성: 실제 Supabase Auth 기반 인증, XSS 방어, RLS 연동
+ * v2.1 업데이트: 조인 외래키 명시, 카카오링크 검증, Auth 세션 예외 처리 강화
  */
 
 'use strict';
 
 // ============================================================
-// 1. Supabase 클라이언트 초기화
+// 1. Supabase 클라이언트 초기화 (config.js의 값 사용)
 // ============================================================
 const cfg = window.__ENV__;
 
@@ -21,28 +22,28 @@ if (!cfg || !cfg.SUPABASE_URL || cfg.SUPABASE_URL.includes('YOUR_PROJECT')) {
 
 const _sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
   auth: {
-    persistSession:     true,
-    autoRefreshToken:   true,
-    detectSessionInUrl: true
+    persistSession:     true,   // 새로고침 후 세션 유지
+    autoRefreshToken:   true,   // 토큰 자동 갱신
+    detectSessionInUrl: true    // 이메일 링크 자동 처리
   }
 });
 
 // ============================================================
-// 2. 전역 상태
+// 2. 전역 상태 (단일 진실 원천)
 // ============================================================
 const state = {
-  authUser:      null,
-  profile:       null,
+  authUser:      null,   // Supabase auth.user
+  profile:       null,   // users 테이블 row
   currentScreen: 'screen-landing',
   screenHistory: [],
   isPreviewMode: false,
-  regData:       null,
-  uploadedFile:  null
+  regData:       null,   // 회원가입 임시 데이터
+  uploadedFile:  null    // 학생증 파일 객체
 };
 window.state = state;
 
 // ============================================================
-// 3. XSS 방어 유틸
+// 3. XSS 방어 유틸 (innerHTML 사용 시 반드시 통과)
 // ============================================================
 function esc(str) {
   if (str == null) return '';
@@ -55,6 +56,7 @@ function esc(str) {
     .replace(/\//g, '&#x2F;');
 }
 
+// textContent 사용 헬퍼
 function setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text ?? '';
@@ -67,7 +69,7 @@ let _toastTimer;
 function showToast(msg, duration = 2800) {
   const el = document.getElementById('toast');
   if (!el) return;
-  el.textContent = msg;
+  el.textContent = msg;     // textContent로 XSS 방어
   el.classList.add('show');
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => el.classList.remove('show'), duration);
@@ -81,7 +83,7 @@ function setBtnLoading(id, loading, originalText) {
 }
 
 // ============================================================
-// 5. 화면 전환
+// 5. 화면 전환 (보호 라우팅 포함)
 // ============================================================
 const PROTECTED_SCREENS = new Set([
   'screen-team-register','screen-apply','screen-requests',
@@ -90,6 +92,7 @@ const PROTECTED_SCREENS = new Set([
 const ADMIN_SCREENS = new Set(['screen-admin']);
 
 function showScreen(id) {
+  // 보호된 화면 접근 제어
   if (PROTECTED_SCREENS.has(id) && !state.profile) {
     showAuthGateModal('default');
     return;
@@ -118,7 +121,7 @@ window.history.back = function () {
 };
 
 // ============================================================
-// 6. 탭 전환
+// 6. 탭 전환 (비로그인 게이트)
 // ============================================================
 const TAB_SCREEN = {
   home: 'screen-home', find: 'screen-team-register',
@@ -159,7 +162,7 @@ function showAuthGateModal(action) {
 window.showAuthGateModal = showAuthGateModal;
 
 // ============================================================
-// 8. 앱 초기화
+// 8. 앱 초기화 (세션 복원)
 // ============================================================
 async function initApp() {
   try {
@@ -176,6 +179,7 @@ async function initApp() {
     console.error('[initApp]', e);
   }
 
+  // Auth 상태 변경 리스너
   _sb.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_IN' && session?.user) {
       state.authUser = session.user;
@@ -186,6 +190,7 @@ async function initApp() {
     }
   });
 
+  // 미로그인 — 랜딩 화면 초기화
   renderPreviewTeamList();
   updateHomeStats();
 }
@@ -206,6 +211,7 @@ async function loadProfile(authUserId) {
 function enterAuthenticatedApp() {
   const p = state.profile;
   if (!p) return;
+  // textContent 사용으로 XSS 방어
   setText('home-username', p.nickname + '님');
   setText('my-nickname', p.nickname);
   setText('my-info', `${p.university} · ${p.department} · ${new Date().getFullYear() - p.birth_year + 1}세`);
@@ -218,40 +224,51 @@ function enterAuthenticatedApp() {
 }
 
 // ============================================================
-// 9. 일반 사용자 로그인
+// 9. ★★★ 로그인 — 실제 Supabase Auth 검증 (가짜 로그인 완전 제거) ★★★
 // ============================================================
 async function doLogin() {
   const usernameRaw = document.getElementById('login-id')?.value.trim();
   const password    = document.getElementById('login-pw')?.value;
 
+  // 클라이언트 사전 검증
   if (!usernameRaw) { showToast('아이디를 입력해주세요'); return; }
   if (!password)    { showToast('비밀번호를 입력해주세요'); return; }
   if (usernameRaw.length < 4) { showToast('아이디는 4자 이상이어야 합니다'); return; }
 
   setBtnLoading('btn-login', true, '로그인');
   try {
-    const email = `${usernameRaw}@chuncheon-dating.com`;
+    // username → 내부 이메일 변환
+    const email = `${usernameRaw}@chuncheon-dating.local`;
+
+    // ★ 실제 Supabase Auth 검증 (비밀번호 불일치 시 자동 실패)
     const { data, error } = await _sb.auth.signInWithPassword({ email, password });
 
     if (error) {
+      // 한국어 오류 메시지
       if (error.message.toLowerCase().includes('invalid login')) {
         throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
+      }
+      if (error.message.toLowerCase().includes('email not confirmed')) {
+        throw new Error('이메일 인증이 필요합니다. 관리자에게 문의하세요.');
       }
       throw new Error('로그인 실패: ' + error.message);
     }
 
+    // users 테이블 프로필 조회
     const profile = await loadProfile(data.user.id);
     if (!profile) {
       await _sb.auth.signOut();
       throw new Error('사용자 정보를 찾을 수 없습니다. 관리자에게 문의하세요.');
     }
 
+    // ★ 제재 계정 즉시 차단
     if (profile.is_banned) {
       await _sb.auth.signOut();
       state.profile = null;
       throw new Error('이용이 제한된 계정입니다. 관리자에게 문의하세요.');
     }
 
+    // 입력 필드 초기화
     document.getElementById('login-id').value = '';
     document.getElementById('login-pw').value = '';
 
@@ -267,7 +284,7 @@ async function doLogin() {
 window.doLogin = doLogin;
 
 // ============================================================
-// 10. ★ 관리자 로그인 (자동 복구 로직 포함) ★
+// 10. ★★★ 관리자 로그인 — role=admin 확인 필수 ★★★
 // ============================================================
 async function doAdminLogin() {
   const usernameRaw = document.getElementById('admin-id')?.value.trim();
@@ -277,70 +294,22 @@ async function doAdminLogin() {
 
   setBtnLoading('btn-admin-login', true, '관리자 로그인');
   try {
-    let email = `${usernameRaw}@chuncheon-dating.com`;
-    let authRes = await _sb.auth.signInWithPassword({ email, password });
+    const email = `${usernameRaw}@chuncheon-dating.local`;
 
-    // [자동 복구 1단계] 인증 실패 및 john1217 계정인 경우
-    if (authRes.error && usernameRaw === 'john1217' && password === 'king1217') {
-      // 혹시 .local 로 가입되어 있는지 재확인
-      email = `${usernameRaw}@chuncheon-dating.local`;
-      authRes = await _sb.auth.signInWithPassword({ email, password });
-      
-      // 그래도 안 되면 아예 Auth 계정이 없는 상태이므로 강제 가입 처리
-      if (authRes.error) {
-        const { data: signUpData, error: signUpErr } = await _sb.auth.signUp({ email, password });
-        if (signUpErr) throw new Error('관리자 계정 복구 실패: ' + signUpErr.message);
-        
-        showToast('🔄 관리자 계정 초기화가 완료되었습니다. 다시 로그인 버튼을 눌러주세요.');
-        setBtnLoading('btn-admin-login', false, '관리자 로그인');
-        return; // 1회 중단하고 다시 누르도록 유도
-      }
-    } else if (authRes.error) {
-      throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
-    }
+    const { data, error } = await _sb.auth.signInWithPassword({ email, password });
+    if (error) throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
 
-    const authUser = authRes.data?.user;
-    if (!authUser) throw new Error('인증 정보를 불러올 수 없습니다.');
-
-    let profile = await loadProfile(authUser.id);
-
-    // [자동 복구 2단계] 로그인은 되었으나 users 테이블과 UUID가 끊어진 경우 강제 매핑
-    if (!profile && usernameRaw === 'john1217') {
-      // 꼬여있는 기존 john1217 데이터 삭제 (이름 중복 방지)
-      await _sb.from('users').delete().eq('username', 'john1217');
-
-      const { data: newAdmin, error: insertErr } = await _sb.from('users').insert({
-        auth_id: authUser.id,
-        username: 'john1217',
-        nickname: '최고관리자',
-        gender: 'male',
-        role: 'admin',
-        university: '운영진',
-        department: '시스템',
-        student_number: '00000000',
-        birth_year: 1990,
-        profile_active: true
-      }).select().single();
-
-      if (insertErr) throw new Error('관리자 DB 매핑 실패: ' + insertErr.message);
-      profile = newAdmin;
-    }
-
+    const profile = await loadProfile(data.user.id);
     if (!profile) {
       await _sb.auth.signOut();
-      throw new Error('사용자 DB 정보를 찾을 수 없습니다.');
+      throw new Error('사용자 정보를 찾을 수 없습니다.');
     }
 
-    // [자동 복구 3단계] 관리자인데 일반 권한(user)으로 되어있다면 강제 승격
+    // ★ role = admin 반드시 확인 — 아니면 즉시 세션 종료
     if (profile.role !== 'admin') {
-      if (usernameRaw === 'john1217') {
-        await _sb.from('users').update({ role: 'admin' }).eq('id', profile.id);
-        profile.role = 'admin';
-      } else {
-        await _sb.auth.signOut();
-        state.profile = null;
-        throw new Error('관리자 권한이 없습니다. 일반 회원 화면을 이용해주세요.');
-      }
+      await _sb.auth.signOut();
+      state.profile = null;
+      throw new Error('관리자 권한이 없습니다. 일반 회원 로그인 화면을 이용해주세요.');
     }
 
     if (profile.is_banned) {
@@ -348,8 +317,8 @@ async function doAdminLogin() {
       throw new Error('이용이 제한된 계정입니다.');
     }
 
-    // 모든 과정 통과 시 관리자 화면 표시
     document.getElementById('admin-pw').value = '';
+    // 관리자 화면으로 이동 (showScreen에서 role 체크)
     showScreen('screen-admin');
     renderAdminDashboard();
     showToast('관리자로 로그인되었습니다 🛠');
@@ -363,10 +332,11 @@ async function doAdminLogin() {
 window.doAdminLogin = doAdminLogin;
 
 // ============================================================
-// 11. 로그아웃
+// 11. 로그아웃 (세션 완전 삭제)
 // ============================================================
 async function doLogout() {
   await _sb.auth.signOut();
+  // 로컬 상태 완전 초기화
   state.authUser = null;
   state.profile  = null;
   state.regData  = null;
@@ -393,7 +363,7 @@ function enterGuestBrowse() {
 window.enterGuestBrowse = enterGuestBrowse;
 
 // ============================================================
-// 13. 홈 통계
+// 13. 홈 통계 (DB에서 실시간)
 // ============================================================
 async function updateHomeStats() {
   try {
@@ -411,14 +381,16 @@ async function updateHomeStats() {
 window.updateHomeStats = updateHomeStats;
 
 // ============================================================
-// 14. 회원가입 임시저장
+// 14. 회원가입 — 실제 DB 저장
 // ============================================================
 async function goToVerification() {
+  // 필수 동의 검증
   const required = document.querySelectorAll('.required-agree');
   for (const cb of required) {
     if (!cb.checked) { showToast('필수 항목에 모두 동의해주세요'); return; }
   }
 
+  // 폼 값 수집
   const username   = document.getElementById('reg-username')?.value.trim();
   const password   = document.getElementById('reg-password')?.value;
   const password2  = document.getElementById('reg-password2')?.value;
@@ -433,6 +405,7 @@ async function goToVerification() {
   const bio        = document.getElementById('reg-bio')?.value.trim() || null;
   const marketing  = !!document.getElementById('agree-marketing')?.checked;
 
+  // 입력값 검증 (서버 재검증도 하지만 UX를 위해 클라이언트도 검증)
   if (!username || username.length < 4) { showToast('아이디는 4자 이상이어야 합니다'); return; }
   if (!/^[a-zA-Z0-9_]+$/.test(username)){ showToast('아이디는 영문·숫자·밑줄만 사용 가능합니다'); return; }
   if (!password || password.length < 8)  { showToast('비밀번호는 8자 이상이어야 합니다'); return; }
@@ -446,10 +419,12 @@ async function goToVerification() {
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
 
+  // 아이디 중복 확인
   const { data: existing } = await _sb
     .from('users').select('id').eq('username', username).single();
   if (existing) { showToast('이미 사용 중인 아이디입니다'); return; }
 
+  // 임시 저장
   state.regData = {
     username, password, gender, university, department,
     student_number: studentNum, birth_year: birthYear,
@@ -470,7 +445,7 @@ async function goToVerification() {
 window.goToVerification = goToVerification;
 
 // ============================================================
-// 15. 학생증 업로드 + DB 저장
+// 15. 학생증 업로드 + 회원가입 최종 완료
 // ============================================================
 async function submitVerification() {
   const d = state.regData;
@@ -480,13 +455,15 @@ async function submitVerification() {
   const file = fileInput?.files?.[0];
   if (!file) { showToast('학생증 이미지를 업로드해주세요'); return; }
 
+  // 파일 검증
   const ALLOWED_TYPES = ['image/jpeg','image/png','image/webp'];
   if (!ALLOWED_TYPES.includes(file.type)) { showToast('JPG, PNG, WEBP 파일만 업로드 가능합니다'); return; }
   if (file.size > 10 * 1024 * 1024) { showToast('파일 크기는 10MB 이하여야 합니다'); return; }
 
   setBtnLoading('btn-verify', true, '업로드 완료');
   try {
-    const email = `${d.username}@chuncheon-dating.com`;
+    // 1. Supabase Auth 계정 생성
+    const email = `${d.username}@chuncheon-dating.local`;
     const { data: authData, error: authErr } = await _sb.auth.signUp({
       email, password: d.password,
       options: { data: { username: d.username } }
@@ -499,6 +476,7 @@ async function submitVerification() {
       throw new Error('계정 생성 실패: ' + authErr.message);
     }
     
+    // ★ 추가된 방어 로직: 세션 생성 여부 확인 (이메일 인증 충돌 방지)
     if (!authData.session) {
       throw new Error('이메일 인증 설정 충돌입니다. Supabase 대시보드에서 Confirm Email 설정을 OFF로 변경하세요.');
     }
@@ -506,6 +484,7 @@ async function submitVerification() {
     const authId = authData.user?.id;
     if (!authId) throw new Error('계정 생성 중 오류가 발생했습니다.');
 
+    // 2. users 테이블 프로필 저장
     const { data: profile, error: profileErr } = await _sb.from('users').insert({
       auth_id: authId, username: d.username, nickname: d.nickname,
       gender: d.gender, role: 'user', university: d.university,
@@ -515,6 +494,7 @@ async function submitVerification() {
     }).select().single();
     if (profileErr) throw new Error('프로필 저장 실패: ' + profileErr.message);
 
+    // 3. 동의 항목 저장
     const c = d.consents;
     await _sb.from('terms_consents').insert({
       user_id: profile.id, is_adult: true, terms_agree: true,
@@ -523,6 +503,7 @@ async function submitVerification() {
       marketing_agree: !!c.marketingAgree
     });
 
+    // 4. 학생증 Storage 업로드 (경로: verifications/{auth_id}/filename)
     const ext      = file.name.split('.').pop().toLowerCase().replace(/[^a-z]/g,'');
     const safeName = `${Date.now()}.${ext}`;
     const filePath = `verifications/${authId}/${safeName}`;
@@ -532,17 +513,17 @@ async function submitVerification() {
       .upload(filePath, file, { contentType: file.type, upsert: false });
     if (uploadErr) throw new Error('이미지 업로드 실패: ' + uploadErr.message);
 
+    // 5. student_verifications 테이블 저장
     await _sb.from('student_verifications').insert({
       user_id: profile.id, image_path: filePath, status: 'pending'
     });
 
+    // 완료
     state.profile = profile;
     state.regData = null;
     setText('home-username', profile.nickname + '님');
-    
-    // ★ 업로드 성공 시 즉시 입금 화면으로 이동
-    showToast('🎉 학생증 업로드 완료! 이어서 입금을 진행해주세요.');
-    showScreen('screen-deposit'); 
+    showToast('🎉 가입 완료! 학생증 검토 후 알림드릴게요');
+    showScreen('screen-deposit');
 
   } catch(err) {
     showToast('❌ ' + err.message);
@@ -553,16 +534,11 @@ async function submitVerification() {
 window.submitVerification = submitVerification;
 
 // ============================================================
-// 16. 입금 완료 클릭 → 검토중(Pending) 화면으로 이동
+// 16. 입금 신청 → DB 저장
 // ============================================================
 async function submitDeposit() {
   const profile = state.profile;
-  
-  if (!profile) {
-    showToast('로그인이 필요합니다. 다시 로그인해주세요.');
-    showScreen('screen-landing');
-    return;
-  }
+  if (!profile) { showToast('로그인이 필요합니다'); return; }
 
   const name = document.getElementById('depositor-name')?.value.trim();
   if (!name || name.length < 2) { showToast('입금자명을 정확히 입력해주세요'); return; }
@@ -577,10 +553,8 @@ async function submitDeposit() {
     );
     if (error) throw new Error('입금 신청 저장 실패: ' + error.message);
 
-    // ★ 입금 DB 저장 완료 시 '검토중입니다' 화면으로 이동
-    showToast('💳 입금 확인이 요청되었습니다!');
-    showScreen('screen-pending'); 
-
+    showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
+    showScreen('screen-pending');
   } catch(err) {
     showToast('❌ ' + err.message);
   } finally {
@@ -598,6 +572,7 @@ async function doWithdraw() {
   if (!confirm('정말 탈퇴하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) return;
 
   try {
+    // soft delete
     await _sb.from('users').update({
       deleted_at: new Date().toISOString(), profile_active: false
     }).eq('id', profile.id);
@@ -615,7 +590,7 @@ async function doWithdraw() {
 window.doWithdraw = doWithdraw;
 
 // ============================================================
-// 18. 팀 목록
+// 18. 팀 목록 (DB에서 로드)
 // ============================================================
 let _cachedTeams = [];
 
@@ -657,7 +632,7 @@ async function loadTeams(filterVal) {
 window.loadTeams = loadTeams;
 
 // ============================================================
-// 19. 팀 목록 렌더
+// 19. 팀 목록 렌더 (XSS 방어 적용)
 // ============================================================
 const EMOJIS  = ['👨‍💻','🎮','🎸','☕','✈️','🎨','💪','🎳','🕹️','📚'];
 const COLORS  = ['#FF6B9D','#C77DFF','#FF8C69','#48CAE4','#F77F00'];
@@ -680,6 +655,7 @@ function renderTeamList() {
     return;
   }
 
+  // innerHTML 사용하되 모든 사용자 데이터는 esc() 처리
   container.innerHTML = teams.map((team, ti) => {
     const members = team.team_members || [];
     const avgAge  = members.length
@@ -749,11 +725,13 @@ window.filterTeams = filterTeams;
 // 21. 팀 상세
 // ============================================================
 async function openTeamDetail(teamId) {
+  // 보안: ID 형식 검증
   if (!/^[0-9a-f-]{36}$/i.test(teamId)) return;
 
   const team = _cachedTeams.find(t => t.id === teamId);
   if (!team) return;
 
+  // textContent로 안전하게 설정
   setText('detail-title', team.title);
   setText('detail-univ', team.university);
 
@@ -819,6 +797,7 @@ async function registerTeam() {
     });
   }
 
+  // ★ 수정 3: 빈 문자열을 null로 변환 및 유효성 검사 적용
   let kakaoLink = document.getElementById('kakao-link')?.value.trim();
   if (kakaoLink === '') kakaoLink = null;
   if (kakaoLink && !kakaoLink.startsWith('https://')) {
@@ -875,6 +854,7 @@ async function loadAndRenderRequests(tab) {
   container.innerHTML = '<div style="text-align:center;padding:24px;"><div class="spinner"></div></div>';
 
   try {
+    // 내 팀 조회
     const { data: myTeam } = await _sb.from('teams')
       .select('id').eq('leader_id', state.profile?.id).single();
 
@@ -966,6 +946,7 @@ async function loadAndRenderRequests(tab) {
 }
 window.loadAndRenderRequests = loadAndRenderRequests;
 
+// 탭 전환 버튼
 function switchRequestTab(tab) {
   const sent = document.getElementById('tab-sent');
   const recv = document.getElementById('tab-received');
@@ -980,6 +961,7 @@ function switchRequestTab(tab) {
 }
 window.switchRequestTab = switchRequestTab;
 
+// 수락
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
@@ -987,7 +969,8 @@ async function acceptMatchRequest(requestId) {
       status: 'matched', responded_at: new Date().toISOString()
     }).eq('id', requestId);
 
-    showToast('🎉 수락했습니다! 매칭 성사되었어요');
+    // matches 레코드는 관리자 또는 DB 함수로 생성
+    showToast('🎉 수락했습니다! 매칭이 성사되었어요');
     showScreen('screen-match-success');
   } catch(err) {
     showToast('❌ ' + err.message);
@@ -995,6 +978,7 @@ async function acceptMatchRequest(requestId) {
 }
 window.acceptMatchRequest = acceptMatchRequest;
 
+// 거절
 async function rejectMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
@@ -1028,6 +1012,7 @@ function renderMessages() {
     return;
   }
 
+  // XSS 방어: textContent 설정
   container.innerHTML = '';
   for (const m of _localMessages) {
     const group = document.createElement('div');
@@ -1036,7 +1021,7 @@ function renderMessages() {
 
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble ${m.mine ? 'mine' : 'theirs'}`;
-    bubble.textContent = m.text;
+    bubble.textContent = m.text; // ★ textContent로 XSS 방어
 
     const time = document.createElement('div');
     time.className = 'chat-time';
@@ -1116,7 +1101,7 @@ async function submitReport() {
   try {
     const { error } = await _sb.from('reports').insert({
       reporter_id: profile.id, report_type: type, description: desc, status: 'pending',
-      target_user_id: null
+      target_user_id: null // 실제 구현 시 대상 지정
     });
     if (error) throw error;
     closeModal('modal-report');
@@ -1130,8 +1115,10 @@ async function submitReport() {
 window.submitReport = submitReport;
 
 // ============================================================
-// 28. 관리자 기능
+// 28. 관리자 기능 (role=admin 확인 후 실행)
 // ============================================================
+
+// 관리자 권한 체크 래퍼
 function assertAdmin() {
   if (state.profile?.role !== 'admin') {
     showToast('❌ 관리자 권한이 필요합니다');
@@ -1139,6 +1126,7 @@ function assertAdmin() {
   }
 }
 
+// 관리자 액션 로그 (DB 함수 호출)
 async function writeAdminLog(action, targetType, targetId, detail) {
   try {
     await _sb.rpc('log_admin_action', {
@@ -1152,6 +1140,7 @@ async function writeAdminLog(action, targetType, targetId, detail) {
   }
 }
 
+// 대시보드 통계
 async function renderAdminDashboard() {
   try { assertAdmin(); } catch { return; }
 
@@ -1208,6 +1197,7 @@ function adminStat(label, num, icon='', onclick='', color='') {
   </div>`;
 }
 
+// 관리자 탭 전환
 async function switchAdminTab(tab, el) {
   try { assertAdmin(); } catch { return; }
 
@@ -1225,6 +1215,7 @@ async function switchAdminTab(tab, el) {
   if (!container) return;
   container.innerHTML = '<div style="padding:24px;text-align:center;"><div class="spinner"></div></div>';
 
+  // ── 회원 목록 (★ 수정 1: 외래키 충돌 방지를 위해 테이블 명시)
   if (tab === 'users') {
     const { data: users, error } = await _sb
       .from('users')
@@ -1247,12 +1238,14 @@ async function switchAdminTab(tab, el) {
     return;
   }
 
+  // ── 인증 목록
   if (tab === 'verif') {
     const { data: verifs } = await _sb
       .from('student_verifications')
       .select('*, users(id,nickname,username,university,gender)')
       .order('created_at', { ascending: false });
 
+    // 서명된 URL 생성 (5분 유효)
     const rows = await Promise.all((verifs||[]).map(async v => {
       if (v.image_path) {
         const { data: urlData } = await _sb.storage
@@ -1298,6 +1291,7 @@ async function switchAdminTab(tab, el) {
     return;
   }
 
+  // ── 입금 목록
   if (tab === 'deposit') {
     const { data: deposits } = await _sb
       .from('deposits')
@@ -1344,6 +1338,7 @@ async function switchAdminTab(tab, el) {
     return;
   }
 
+  // ── 신고 목록
   if (tab === 'reports') {
     const { data: reps } = await _sb
       .from('reports')
@@ -1382,6 +1377,7 @@ async function switchAdminTab(tab, el) {
     return;
   }
 
+  // ── 팀 목록
   if (tab === 'teams') {
     const { data: teams } = await _sb
       .from('teams').select('*, team_members(*)')
@@ -1409,6 +1405,7 @@ async function switchAdminTab(tab, el) {
 }
 window.switchAdminTab = switchAdminTab;
 
+// 관리자 회원 행
 function renderAdminUserRow(u) {
   const v = u.student_verifications?.[0] || {};
   const d = u.deposits?.[0] || {};
@@ -1448,6 +1445,7 @@ function renderAdminUserRow(u) {
 }
 window.renderAdminUserRow = renderAdminUserRow;
 
+// 회원 검색 필터
 function filterAdminUsers(q) {
   const users = window._adminUsers || [];
   const filtered = q.trim()
@@ -1464,6 +1462,7 @@ function filterAdminUsers(q) {
 }
 window.filterAdminUsers = filterAdminUsers;
 
+// 관리자 회원 상세 (★ 수정 2: 외래키 충돌 방지를 위해 테이블 명시)
 async function openAdminUserDetail(userId) {
   try { assertAdmin(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
@@ -1518,6 +1517,7 @@ function iRow(label, value) {
   </div>`;
 }
 
+// 인증 승인
 async function adminApproveVerif(verifId, userId) {
   try { assertAdmin(); } catch { return; }
   if (!confirm('인증을 승인하시겠습니까?')) return;
@@ -1539,6 +1539,7 @@ async function adminApproveVerif(verifId, userId) {
 }
 window.adminApproveVerif = adminApproveVerif;
 
+// 인증 반려
 async function adminRejectVerif(verifId, userId) {
   try { assertAdmin(); } catch { return; }
   const reason = prompt('반려 사유를 입력하세요 (회원에게 표시됩니다):');
@@ -1561,6 +1562,7 @@ async function adminRejectVerif(verifId, userId) {
 }
 window.adminRejectVerif = adminRejectVerif;
 
+// 입금 확인
 async function adminConfirmDeposit(depositId, userId) {
   try { assertAdmin(); } catch { return; }
   if (!confirm('입금을 확인 처리하시겠습니까?')) return;
@@ -1581,6 +1583,7 @@ async function adminConfirmDeposit(depositId, userId) {
 }
 window.adminConfirmDeposit = adminConfirmDeposit;
 
+// 입금 반려
 async function adminRejectDeposit(depositId) {
   try { assertAdmin(); } catch { return; }
   const reason = prompt('반려 사유를 입력하세요:');
@@ -1600,6 +1603,7 @@ async function adminRejectDeposit(depositId) {
 }
 window.adminRejectDeposit = adminRejectDeposit;
 
+// 회원 제재
 async function adminBanUser(userId, reportId) {
   try { assertAdmin(); } catch { return; }
   if (!userId || !/^[0-9a-f-]{36}$/i.test(userId)) return;
@@ -1622,6 +1626,7 @@ async function adminBanUser(userId, reportId) {
 }
 window.adminBanUser = adminBanUser;
 
+// 제재 해제
 async function adminUnbanUser(userId) {
   try { assertAdmin(); } catch { return; }
   if (!confirm('제재를 해제하시겠습니까?')) return;
@@ -1638,6 +1643,7 @@ async function adminUnbanUser(userId) {
 }
 window.adminUnbanUser = adminUnbanUser;
 
+// 팀 숨김
 async function adminHideTeam(teamId) {
   try { assertAdmin(); } catch { return; }
   if (!confirm('이 팀을 숨김 처리하시겠습니까?')) return;
@@ -1653,6 +1659,7 @@ async function adminHideTeam(teamId) {
 }
 window.adminHideTeam = adminHideTeam;
 
+// 신고 기각
 async function adminDismissReport(reportId) {
   try { assertAdmin(); } catch { return; }
 
@@ -1712,12 +1719,14 @@ function closeModal(id) {
 }
 window.closeModal = closeModal;
 
+// 모달 오버레이 클릭 닫기
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', e => {
     if (e.target === overlay) overlay.classList.remove('show');
   });
 });
 
+// 파일 업로드
 function triggerUpload() { document.getElementById('file-input')?.click(); }
 function handleFileSelect(input) {
   const file = input.files?.[0];
@@ -1726,6 +1735,7 @@ function handleFileSelect(input) {
   if (!ALLOWED.includes(file.type)) { showToast('JPG, PNG 파일만 업로드 가능합니다'); return; }
   if (file.size > 10*1024*1024)     { showToast('10MB 이하 파일만 업로드 가능합니다'); return; }
   state.uploadedFile = file;
+  // textContent로 XSS 방어
   setText('upload-icon',  '✅');
   setText('upload-title', file.name);
   setText('upload-sub',   (file.size/1024).toFixed(0)+'KB');
@@ -1735,12 +1745,14 @@ function handleFileSelect(input) {
 window.triggerUpload    = triggerUpload;
 window.handleFileSelect = handleFileSelect;
 
+// 전체 동의
 function toggleAll(el) {
   document.querySelectorAll('.required-agree, #screen-register input[type="checkbox"]')
     .forEach(c => { c.checked = el.checked; });
 }
 window.toggleAll = toggleAll;
 
+// 출생연도 초기화
 (function initBirthYear() {
   const sel = document.getElementById('birth-year');
   if (!sel) return;
@@ -1755,6 +1767,7 @@ window.toggleAll = toggleAll;
   sel.appendChild(fragment);
 })();
 
+// 팀원 폼 초기화
 (function initTeamForms() {
   const container = document.getElementById('team-member-forms');
   if (!container) return;
@@ -1767,6 +1780,7 @@ window.toggleAll = toggleAll;
     return opt.outerHTML;
   }).join('');
 
+  // innerHTML 사용 (정적 UI, 사용자 데이터 없음)
   container.innerHTML = [1,2,3].map(i => `
     <div class="card card-p" style="margin-bottom:12px;" id="member-card-${i}">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
@@ -1841,6 +1855,7 @@ function handleVerifConfirm(i, el) {
 }
 window.handleVerifConfirm = handleVerifConfirm;
 
+// 약관 모달 (정적 데이터)
 const TERMS_DATA = {
   terms: {
     title: '서비스 이용약관',
@@ -1863,6 +1878,7 @@ const TERMS_DATA = {
 function showTerms(type) {
   const d = TERMS_DATA[type];
   if (!d) return;
+  // textContent로 XSS 방어
   setText('modal-terms-title', d.title);
   const body = document.getElementById('modal-terms-body');
   if (body) body.textContent = d.body;
