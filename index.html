@@ -914,7 +914,7 @@
     animation: floatUp 3s ease-in infinite;
     opacity: 0;
   }
-</head>
+  @keyframes floatUp {
     0% { transform: translateY(0) scale(0.5); opacity: 0; }
     30% { opacity: 1; }
     100% { transform: translateY(-120px) scale(1.2); opacity: 0; }
@@ -2014,6 +2014,7 @@
     </div>
   </div>
 
+  </div>
   <div id="toast" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ③ 메인 앱 스크립트 -->
