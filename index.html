@@ -1104,6 +1104,11 @@
           <label class="form-label">닉네임 <span class="required">*</span></label>
           <input class="form-input" id="reg-nickname" type="text" placeholder="표시될 이름">
         </div>
+        <div class="form-group">
+          <label class="form-label">커스텀 뱃지 <span style="color:var(--gray-400);font-weight:400;">(선택)</span></label>
+          <input class="form-input" id="reg-custom-badge" type="text" placeholder="예: 얼굴천재, MC, 분위기메이커" maxlength="20">
+          <p class="form-hint">팀 카드에 MBTI 옆에 표시됩니다 (최대 20자)</p>
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -1402,7 +1407,7 @@
       </button>
       <button class="tab-item" onclick="switchTab('find')">
         <span class="tab-icon">👥</span>
-        <span class="tab-label">팀찾기</span>
+        <span class="tab-label">팀 등록</span>
       </button>
       <button class="tab-item" onclick="switchTab('requests')">
         <span class="tab-icon">💌</span>
@@ -1486,30 +1491,91 @@
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
           <div style="background:var(--pink);color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">1</div>
           <span style="font-size:14px;font-weight:700;">팀원 1 (나)</span>
-          <span class="chip chip-pink">팀장</span>
+          <span class="chip chip-pink">팀장 · 필수</span>
         </div>
         <div class="form-row">
           <div class="form-group" style="margin-bottom:10px;">
             <label class="form-label">나이 <span class="required">*</span></label>
-            <input class="form-input" type="number" value="22" style="height:44px;">
+            <input class="form-input" id="apply-m1-age" type="number" placeholder="22" min="19" max="60" style="height:44px;">
           </div>
           <div class="form-group" style="margin-bottom:10px;">
             <label class="form-label">MBTI</label>
-            <select class="form-select" style="height:44px;"><option>ENFJ</option></select>
+            <select class="form-select" id="apply-m1-mbti" style="height:44px;">
+              <option value="">선택</option>
+              <option>INTJ</option><option>INTP</option><option>ENTJ</option><option>ENTP</option>
+              <option>INFJ</option><option>INFP</option><option>ENFJ</option><option>ENFP</option>
+              <option>ISTJ</option><option>ISFJ</option><option>ESTJ</option><option>ESFJ</option>
+              <option>ISTP</option><option>ISFP</option><option>ESTP</option><option>ESFP</option>
+            </select>
           </div>
         </div>
-        <div class="form-group" style="margin-bottom:10px;">
+        <div class="form-group" style="margin-bottom:0;">
           <label class="form-label">한줄 소개</label>
-          <input class="form-input" type="text" placeholder="나를 표현하는 한 문장" style="height:44px;">
+          <input class="form-input" id="apply-m1-intro" type="text" placeholder="나를 표현하는 한 문장" style="height:44px;" maxlength="200">
         </div>
       </div>
 
-      <!-- 팀원 2, 3 -->
-      <div id="apply-members"><!-- 팀원 2,3 동일 구조 --></div>
+      <!-- 팀원 2 (선택) -->
+      <div class="card card-p" style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <div style="background:var(--purple);color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">2</div>
+          <span style="font-size:14px;font-weight:700;">팀원 2</span>
+          <span class="chip chip-gray" style="font-size:11px;">선택</span>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="margin-bottom:10px;">
+            <label class="form-label">나이</label>
+            <input class="form-input" id="apply-m2-age" type="number" placeholder="22" min="19" max="60" style="height:44px;">
+          </div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label class="form-label">MBTI</label>
+            <select class="form-select" id="apply-m2-mbti" style="height:44px;">
+              <option value="">선택</option>
+              <option>INTJ</option><option>INTP</option><option>ENTJ</option><option>ENTP</option>
+              <option>INFJ</option><option>INFP</option><option>ENFJ</option><option>ENFP</option>
+              <option>ISTJ</option><option>ISFJ</option><option>ESTJ</option><option>ESFJ</option>
+              <option>ISTP</option><option>ISFP</option><option>ESTP</option><option>ESFP</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">한줄 소개</label>
+          <input class="form-input" id="apply-m2-intro" type="text" placeholder="팀원 소개 (선택)" style="height:44px;" maxlength="200">
+        </div>
+      </div>
+
+      <!-- 팀원 3 (선택) -->
+      <div class="card card-p" style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <div style="background:var(--purple);color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">3</div>
+          <span style="font-size:14px;font-weight:700;">팀원 3</span>
+          <span class="chip chip-gray" style="font-size:11px;">선택</span>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="margin-bottom:10px;">
+            <label class="form-label">나이</label>
+            <input class="form-input" id="apply-m3-age" type="number" placeholder="22" min="19" max="60" style="height:44px;">
+          </div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label class="form-label">MBTI</label>
+            <select class="form-select" id="apply-m3-mbti" style="height:44px;">
+              <option value="">선택</option>
+              <option>INTJ</option><option>INTP</option><option>ENTJ</option><option>ENTP</option>
+              <option>INFJ</option><option>INFP</option><option>ENFJ</option><option>ENFP</option>
+              <option>ISTJ</option><option>ISFJ</option><option>ESTJ</option><option>ESFJ</option>
+              <option>ISTP</option><option>ISFP</option><option>ESTP</option><option>ESFP</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">한줄 소개</label>
+          <input class="form-input" id="apply-m3-intro" type="text" placeholder="팀원 소개 (선택)" style="height:44px;" maxlength="200">
+        </div>
+      </div>
 
       <div class="card card-p" style="margin-bottom:12px;">
         <p style="font-size:14px;font-weight:700;margin-bottom:10px;">팀 신청 메시지</p>
-        <textarea class="form-textarea" placeholder="상대팀에게 전하고 싶은 말을 자유롭게 써주세요 (예: 맛집 투어 같이 가요! 🍜)"></textarea>
+        <textarea class="form-textarea" id="apply-message" placeholder="상대팀에게 전하고 싶은 말을 자유롭게 써주세요 (예: 맛집 투어 같이 가요! 🍜)" maxlength="500"></textarea>
       </div>
 
       <button class="btn btn-primary" onclick="submitApply()">💌 신청 완료</button>
@@ -1538,7 +1604,7 @@
 
     <div class="tab-bar">
       <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
-      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀찾기</span></button>
+      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀 등록</span></button>
       <button class="tab-item active" onclick="switchTab('requests')"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span><span class="tab-badge">1</span></button>
       <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">메시지</span></button>
       <button class="tab-item" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
@@ -1567,7 +1633,7 @@
 
     <div class="tab-bar">
       <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
-      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀찾기</span></button>
+      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀 등록</span></button>
       <button class="tab-item" onclick="switchTab('requests')"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
       <button class="tab-item active" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">메시지</span></button>
       <button class="tab-item" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
@@ -1589,16 +1655,16 @@
           <strong style="color:var(--pink);">춘천 핫한 공대생 3인</strong>과의<br>만남이 확정되었습니다 🌸
         </p>
 
-        <!-- 카카오 연결 -->
+        <!-- 연락처 정보 (동적 렌더링) -->
         <div class="card card-p" style="margin-bottom:20px;text-align:left;">
-          <p style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:12px;">💬 카카오톡 연결 정보</p>
-          <div style="background:#FEF9E7;border:1px solid #FFF176;border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;">
-            <p style="font-size:12px;color:var(--gray-600);margin-bottom:4px;">오픈채팅 링크</p>
-            <p style="font-size:14px;font-weight:700;color:#191919;word-break:break-all;">https://open.kakao.com/o/gEXAMPLE</p>
+          <p style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:12px;">📞 상대팀 연락처</p>
+          <div id="match-contact-info" style="background:var(--pink-soft);border:1px solid var(--pink-light);border-radius:var(--radius-sm);padding:14px;margin-bottom:12px;">
+            <p style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">전화번호</p>
+            <p id="match-contact-phone" style="font-size:18px;font-weight:700;color:var(--gray-900);letter-spacing:0.05em;">-</p>
           </div>
-          <button class="kakao-btn" onclick="showToast('카카오톡 오픈채팅으로 이동합니다')">
-            <span style="font-size:20px;">💛</span> 카카오톡 오픈채팅 입장
-          </button>
+          <p style="font-size:12px;color:var(--gray-500);line-height:1.6;">
+            위 번호로 직접 연락하여 만남을 조율해보세요 🌸
+          </p>
         </div>
 
         <div class="info-box info-box-warn" style="margin-bottom:20px;text-align:left;">
@@ -1644,6 +1710,12 @@
         <!-- JS 렌더 -->
       </div>
 
+      <div class="form-group" style="margin-top:8px;">
+        <label class="form-label">카카오 오픈채팅 링크</label>
+        <input class="form-input" type="url" id="kakao-link" placeholder="https://open.kakao.com/o/...">
+        <p class="form-hint">매칭 성사 후에만 상대팀에게 공개됩니다</p>
+      </div>
+
       <button class="btn btn-primary" id="btn-team-register" onclick="registerTeam()">팀 등록하기 🎉</button>
     </div>
   </div>
@@ -1679,6 +1751,13 @@
       </div>
 
       <div class="menu-list">
+        <!-- ★ [요구사항 4] 관리자 모드 전환 버튼 — role=admin 일 때만 표시 (updateMyPageStatus에서 제어) -->
+        <div id="btn-admin-mode" class="menu-item" onclick="showScreen('screen-admin');renderAdminDashboard();"
+          style="display:none;background:linear-gradient(90deg,var(--navy),#2D2D5E);color:white;border-bottom:1px solid rgba(255,255,255,0.1);">
+          <span class="menu-icon">🛠</span>
+          <span class="menu-text" style="color:white;font-weight:700;">관리자 모드 전환</span>
+          <span style="color:rgba(255,255,255,0.5);font-size:13px;">›</span>
+        </div>
         <div class="menu-item" onclick="showScreen('screen-team-register')">
           <span class="menu-icon">👥</span>
           <span class="menu-text">팀 등록/수정</span>
@@ -1743,7 +1822,7 @@
 
     <div class="tab-bar">
       <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
-      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀찾기</span></button>
+      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀 등록</span></button>
       <button class="tab-item" onclick="switchTab('requests')"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
       <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">메시지</span></button>
       <button class="tab-item active" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
