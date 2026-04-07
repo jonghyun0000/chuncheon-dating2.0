@@ -64,61 +64,6 @@ function setText(id, text) {
   if (el) el.textContent = text ?? '';
 }
 
-const IMAGE_MIME_BY_EXT = {
-  jpg:  'image/jpeg',
-  jpeg: 'image/jpeg',
-  png:  'image/png',
-  webp: 'image/webp'
-};
-
-function getFileExt(fileName) {
-  const rawExt = String(fileName || '').split('.').pop().toLowerCase();
-  return rawExt.replace(/[^a-z0-9]/g, '');
-}
-
-function normalizeImageMime(file) {
-  const ext = getFileExt(file?.name);
-  const rawType = String(file?.type || '').trim().toLowerCase();
-
-  if (rawType === 'image/jpg') return { ext, mime: 'image/jpeg' };
-  if (IMAGE_MIME_BY_EXT[ext] && (!rawType || rawType === 'application/octet-stream')) {
-    return { ext, mime: IMAGE_MIME_BY_EXT[ext] };
-  }
-  return { ext, mime: rawType };
-}
-
-function validateUploadImage(file) {
-  if (!file) {
-    return { ok: false, message: '학생증 이미지를 업로드해주세요.' };
-  }
-
-  const { ext, mime } = normalizeImageMime(file);
-  const allowedMimes = new Set(Object.values(IMAGE_MIME_BY_EXT));
-  const allowedExts = new Set(Object.keys(IMAGE_MIME_BY_EXT));
-  const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-
-  if (!allowedExts.has(ext)) {
-    return {
-      ok: false,
-      message: `❌ 파일 확장자가 올바르지 않습니다 (.${esc(ext || '없음')}). jpg·jpeg·png·webp만 가능합니다.`
-    };
-  }
-  if (!allowedMimes.has(mime)) {
-    return {
-      ok: false,
-      message: `❌ 지원하지 않는 파일 형식입니다 (${esc(file.type || '알 수 없음')}). JPG·PNG·WEBP만 가능합니다.`
-    };
-  }
-  if (file.size > 10 * 1024 * 1024) {
-    return {
-      ok: false,
-      message: `❌ 파일 크기 초과: ${fileSizeMB}MB. 10MB 이하 파일만 업로드 가능합니다.`
-    };
-  }
-
-  return { ok: true, ext, mime, fileSizeMB };
-}
-
 // ============================================================
 // 4. 토스트 / 로딩 상태
 // ============================================================
@@ -683,37 +628,20 @@ window.updateHomeStats = updateHomeStats;
  * @returns {Promise<boolean>}   사용 가능하면 true, 중복이면 false
  */
 async function _checkUsernameAvailable(username, silent = false) {
-  const resultEl = document.getElementById('username-check-result');
-  const input = document.getElementById('reg-username');
-  const setInlineResult = (ok, msg) => {
-    if (resultEl) {
-      resultEl.textContent = msg || '';
-      resultEl.style.color = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
-      resultEl.style.fontSize = '12px';
-      resultEl.style.marginTop = '6px';
-      resultEl.style.fontWeight = '600';
-    }
-    if (input) input.style.borderColor = msg ? (ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)') : '';
-  };
-
   if (!username || username.length < 4) {
-    setInlineResult(false, '아이디는 4자 이상이어야 합니다');
     if (!silent) showToast('아이디는 4자 이상이어야 합니다');
     return false;
   }
   if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-    setInlineResult(false, '아이디는 영문·숫자·밑줄만 사용 가능합니다');
     if (!silent) showToast('아이디는 영문·숫자·밑줄만 사용 가능합니다');
     return false;
   }
   const { data } = await _sb
     .from('users').select('id').eq('username', username).maybeSingle();
   if (data) {
-    setInlineResult(false, '❌ 이미 사용 중인 아이디입니다. 다른 아이디를 입력해주세요.');
     if (!silent) showToast('❌ 이미 사용 중인 아이디입니다');
     return false;
   }
-  setInlineResult(true, '✅ 사용 가능한 아이디입니다');
   if (!silent) showToast('✅ 사용 가능한 아이디입니다');
   return true;
 }
@@ -726,10 +654,21 @@ async function _checkUsernameAvailable(username, silent = false) {
 async function checkUsernameBtn() {
   const input = document.getElementById('reg-username');
   const username = input?.value.trim() ?? '';
+  const resultEl = document.getElementById('username-check-result');
 
   setBtnLoading('btn-check-username', true, '확인');
   try {
     const ok = await _checkUsernameAvailable(username, true);
+
+    // 결과 영역이 HTML에 있으면 인라인으로도 표시
+    if (resultEl) {
+      resultEl.textContent = ok ? '✅ 사용 가능한 아이디입니다' : '❌ 이미 사용 중인 아이디입니다';
+      resultEl.style.color = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
+      resultEl.style.fontSize = '12px';
+      resultEl.style.marginTop = '4px';
+    }
+    // 입력 필드 테두리로 즉각 피드백
+    if (input) input.style.borderColor = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
 
     // 중복이면 토스트로도 알림
     if (!ok) showToast('❌ 이미 사용 중인 아이디입니다');
@@ -747,7 +686,6 @@ function onUsernameInput() {
   const resultEl = document.getElementById('username-check-result');
   const input    = document.getElementById('reg-username');
   if (resultEl) resultEl.textContent = '';
-  if (resultEl) resultEl.removeAttribute('style');
   if (input)    input.style.borderColor = '';
 }
 window.onUsernameInput = onUsernameInput;
@@ -853,106 +791,110 @@ async function submitVerification() {
   const d = state.regData;
   if (!d) { showToast('회원가입 정보가 없습니다. 처음부터 다시 시작해주세요.'); return; }
 
+  // ── 파일 검증
   const fileInput = document.getElementById('file-input');
-  const file = fileInput?.files?.[0] || state.uploadedFile;
-  const validation = validateUploadImage(file);
-  if (!validation.ok) { showToast(validation.message); return; }
+  const file      = fileInput?.files?.[0];
+  if (!file) { showToast('학생증 이미지를 업로드해주세요'); return; }
 
-  const { ext: fileExt, mime: normalizedMime, fileSizeMB } = validation;
+  const ALLOWED_TYPES = ['image/jpeg','image/png','image/webp'];
+  const ALLOWED_EXTS  = ['jpg','jpeg','png','webp'];
+  const fileExt       = file.name.split('.').pop().toLowerCase().replace(/[^a-z]/g,'');
+  const fileSizeMB    = (file.size / (1024*1024)).toFixed(2);
+
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    showToast(`❌ JPG·PNG·WEBP 파일만 업로드 가능합니다 (현재: ${esc(file.type||'알 수 없음')})`);
+    return;
+  }
+  if (!ALLOWED_EXTS.includes(fileExt)) {
+    showToast(`❌ 파일 확장자가 올바르지 않습니다 (.${esc(fileExt)})`);
+    return;
+  }
+  if (file.size > 10*1024*1024) {
+    showToast(`❌ 파일 크기 초과: ${fileSizeMB}MB (최대 10MB)`);
+    return;
+  }
 
   setBtnLoading('btn-verify', true, '업로드 완료');
   try {
 
-    // ══════════════════════════════════════════════════════════
-    // STEP 1 — Supabase Auth 계정 생성 (멱등성 보장)
-    //
-    // ★ 핵심 수정: 이전 시도에서 signUp은 성공했지만 이후 단계
-    //   (Storage 업로드 등)에서 실패했을 경우, 재시도 시
-    //   "already registered" 오류가 발생한다.
-    //   → "already registered" 오류를 catch해 기존 계정으로
-    //     로그인 세션을 복구한 뒤 나머지 단계를 이어서 진행한다.
-    // ══════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════
+    // STEP 1 — Auth 계정 확보 (멱등: 이미 있으면 로그인으로 복구)
+    // ════════════════════════════════════════════════════
     const email = `${d.username}@chuncheon-dating.local`;
-
     let signUpUid = null;
-    let sessionResult = null;
 
-    // 먼저 현재 세션에 이미 이 계정으로 로그인된 상태인지 확인
-    const { data: { session: existingSession } } = await _sb.auth.getSession();
-    if (existingSession?.user?.email === email) {
-      // 이전 시도에서 이미 signUp+세션까지 성공한 경우 — 그대로 재사용
-      signUpUid = existingSession.user.id;
-      sessionResult = { session: existingSession, userId: signUpUid };
-      console.info('[submitVerification] 기존 세션 재사용 uid:', signUpUid);
-    } else {
-      const { data: authData, error: authErr } = await _sb.auth.signUp({
+    // 1-a. 현재 세션이 이미 이 이메일이면 재사용
+    const { data: { session: curSession } } = await _sb.auth.getSession().catch(() => ({ data:{session:null} }));
+    if (curSession?.user?.email === email) {
+      signUpUid = curSession.user.id;
+      console.info('[SV] 세션 재사용:', signUpUid);
+    }
+
+    // 1-b. 세션 없음 → signUp 시도
+    if (!signUpUid) {
+      const { data: signUpData, error: signUpErr } = await _sb.auth.signUp({
         email,
         password: d.password,
         options: { data: { username: d.username } }
       });
 
-      if (authErr) {
-        const alreadyExists =
-          authErr.message.includes('already registered') ||
-          authErr.message.includes('User already registered') ||
-          authErr.message.includes('user_already_exists');
+      if (!signUpErr && signUpData?.user?.id) {
+        // 신규 가입 성공
+        signUpUid = signUpData.user.id;
+        console.info('[SV] 신규 signUp 성공:', signUpUid);
 
-        if (alreadyExists) {
-          // ★ 재시도 케이스: Auth 계정은 이미 있음 → 기존 계정으로 로그인해서 uid 획득
-          console.warn('[submitVerification] Auth 계정 이미 존재 → 로그인으로 uid 복구 시도');
-          const { data: signInData, error: signInErr } = await _sb.auth.signInWithPassword({
-            email, password: d.password
-          });
+        // 세션 확정 대기 (Confirm Email OFF 환경: 바로 발급, ON 환경: timeout)
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          const { data: { session: s } } = await _sb.auth.getSession().catch(() => ({ data:{session:null} }));
+          if (s?.user?.id === signUpUid) break;
+          await new Promise(r => setTimeout(r, 300));
+        }
+
+      } else if (signUpErr) {
+        // 1-c. "already registered" → 이전 시도에서 Auth만 만들어진 경우 → 로그인으로 복구
+        const isAlready =
+          signUpErr.message.toLowerCase().includes('already registered') ||
+          signUpErr.message.toLowerCase().includes('user_already_exists');
+
+        if (isAlready) {
+          console.warn('[SV] Auth 계정 이미 있음, signIn으로 uid 복구 시도');
+          const { data: signInData, error: signInErr } = await _sb.auth.signInWithPassword({ email, password: d.password });
           if (signInErr) {
-            // 비밀번호가 다른 경우 → 완전히 다른 사람의 계정일 수 있으므로 중단
-            state.regData = null; // regData 초기화해 무한 재시도 방지
-            throw new Error('아이디가 이미 등록되어 있습니다. 다른 아이디로 처음부터 다시 시도해주세요.');
+            // 비번 불일치 → 진짜 다른 사람 계정 → 안전하게 초기화
+            state.regData = null;
+            throw new Error('이 아이디는 이미 다른 계정에서 사용 중입니다. 다른 아이디로 처음부터 다시 시작해주세요.');
           }
-          signUpUid     = signInData.user.id;
-          sessionResult = { session: signInData.session, userId: signUpUid };
-          console.info('[submitVerification] 기존 계정 로그인 성공, uid:', signUpUid);
+          signUpUid = signInData.user.id;
+          console.info('[SV] signIn으로 uid 복구:', signUpUid);
         } else {
-          throw new Error(`계정 생성 실패 (${authErr.status ?? 'ERR'}): ${authErr.message}`);
+          throw new Error(`계정 생성 실패: ${signUpErr.message}`);
         }
       } else {
-        const authUser = authData?.user;
-        if (!authUser?.id) {
-          throw new Error('계정 생성 응답이 올바르지 않습니다. 잠시 후 다시 시도해주세요.');
-        }
-        signUpUid = authUser.id;
-
-        // UUID 형식 검증
-        const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!UUID_REGEX.test(signUpUid)) {
-          throw new Error(`계정 ID 형식이 올바르지 않습니다 (${esc(signUpUid)}). 관리자에게 문의하세요.`);
-        }
-
-        // ── STEP 2: 세션 확정 대기 (신규 signUp만 필요)
-        sessionResult = await _waitForSession(signUpUid);
-        if (!sessionResult) {
-          console.warn('[submitVerification] 세션 대기 timeout — Confirm Email 설정 확인 필요');
-        }
+        throw new Error('계정 생성 응답이 올바르지 않습니다. 잠시 후 다시 시도해주세요.');
       }
     }
 
-    // uid가 없으면 진행 불가
-    if (!signUpUid) throw new Error('계정 uid를 확인할 수 없습니다. 관리자에게 문의하세요.');
+    if (!signUpUid) throw new Error('계정 uid를 확인할 수 없습니다.');
 
-    // ══════════════════════════════════════════════════════════
-    // STEP 3 — users 테이블 프로필 저장 (멱등성: 이미 있으면 스킵)
-    // ══════════════════════════════════════════════════════════
+    // UUID 형식 검증
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(signUpUid)) {
+      throw new Error(`uid 형식 오류: ${esc(signUpUid)}`);
+    }
 
-    // 이미 프로필이 있는지 확인 (재시도 케이스)
+    // ════════════════════════════════════════════════════
+    // STEP 2 — users 프로필 저장 (멱등: 이미 있으면 스킵)
+    // ════════════════════════════════════════════════════
     let profile = null;
-    const { data: existingProfile } = await _sb
-      .from('users').select('*').eq('auth_id', signUpUid).maybeSingle();
+    const { data: existing } = await _sb
+      .from('users').select('*').eq('auth_id', signUpUid).maybeSingle()
+      .catch(() => ({ data: null }));
 
-    if (existingProfile) {
-      // 이전 시도에서 이미 프로필이 저장된 경우 → 재사용
-      profile = existingProfile;
-      console.info('[submitVerification] 기존 프로필 재사용 id:', profile.id);
+    if (existing) {
+      profile = existing;
+      console.info('[SV] 기존 프로필 재사용:', profile.id);
     } else {
-      const insertPayload = {
+      const { data: newP, error: profileErr } = await _sb.from('users').insert({
         auth_id:         signUpUid,
         username:        d.username,
         nickname:        d.nickname,
@@ -968,61 +910,84 @@ async function submitVerification() {
         bio:             d.bio,
         marketing_agree: d.marketing_agree,
         profile_active:  false
-      };
-
-      const { data: newProfile, error: profileErr } = await _sb
-        .from('users').insert(insertPayload).select().single();
+      }).select().single();
 
       if (profileErr) {
-        if (sessionResult) await _sb.auth.signOut().catch(() => {});
-        let hint = '';
-        if (profileErr.code === '23505') hint = ' → 아이디 중복. 다른 아이디로 처음부터 다시 시작하세요.';
-        else if (profileErr.code === '42501') hint = ' → RLS 권한 오류. Supabase users INSERT 정책을 확인하세요.';
-        state.regData = null; // 에러 시 regData 초기화
-        throw new Error(`프로필 저장 실패 [${profileErr.code}]${hint}: ${profileErr.message}`);
+        // 이미 username 중복(23505) → 방금 다른 탭/요청에서 저장된 경우 재조회
+        if (profileErr.code === '23505') {
+          const { data: retry } = await _sb
+            .from('users').select('*').eq('auth_id', signUpUid).maybeSingle()
+            .catch(() => ({ data: null }));
+          if (retry) { profile = retry; }
+          else {
+            state.regData = null;
+            throw new Error('아이디 중복 오류입니다. 다른 아이디로 다시 시작해주세요.');
+          }
+        } else if (profileErr.code === '42501') {
+          throw new Error('RLS 권한 오류: Supabase → SQL Editor에서 users 테이블 INSERT 정책을 확인하세요. (auth.uid() = auth_id 조건 필요)');
+        } else {
+          throw new Error(`프로필 저장 실패 [${profileErr.code}]: ${profileErr.message}`);
+        }
+      } else {
+        profile = newP;
       }
-      profile = newProfile;
     }
 
-    // ── STEP 4: 동의 항목 저장 (비치명적)
+    if (!profile) throw new Error('프로필을 확보할 수 없습니다. 관리자에게 문의하세요.');
+
+    // ── STEP 3: 동의 항목 (이미 있으면 무시)
     const c = d.consents;
-    const { error: consentErr } = await _sb.from('terms_consents').insert({
+    await _sb.from('terms_consents').insert({
       user_id: profile.id, is_adult: true, terms_agree: true,
       privacy_agree: true, verification_agree: true,
       deposit_agree: true, falsify_agree: true,
       marketing_agree: !!c.marketingAgree
+    }).catch(e => {
+      if (e?.code !== '23505') console.warn('[SV] 동의 저장 실패(무시):', e?.message);
     });
-    if (consentErr && consentErr.code !== '23505') {
-      console.warn('[submitVerification] 동의 항목 저장 실패 (무시됨):', consentErr.message);
-    }
 
-    // ══════════════════════════════════════════════════════════
-    // STEP 5 — 학생증 Storage 업로드
-    // ══════════════════════════════════════════════════════════
-    const safeName = `${Date.now()}.${fileExt}`;
+    // ════════════════════════════════════════════════════
+    // STEP 4 — Storage 업로드
+    //
+    // ★ RLS 핵심: Storage 버킷 정책이
+    //   "name LIKE 'verifications/' || auth.uid() || '/%'"
+    //   형태여야 한다. 세션이 없으면(Confirm Email ON) 업로드가 막힘.
+    //
+    // → upsert:true 사용으로 동일 경로 재시도 허용
+    // → 실패 시 에러 코드별 상세 안내
+    // ════════════════════════════════════════════════════
+    const safeName = `${Date.now()}_${Math.random().toString(36).slice(2,7)}.${fileExt}`;
     const filePath = `verifications/${signUpUid}/${safeName}`;
 
     const { error: uploadErr } = await _sb.storage
       .from('student-verifications')
-      .upload(filePath, file, { contentType: normalizedMime, upsert: false });
+      .upload(filePath, file, { contentType: file.type, upsert: true });
 
     if (uploadErr) {
-      let uploadMsg;
-      if (uploadErr.message.includes('Bucket not found') || uploadErr.message.includes('bucket')) {
-        uploadMsg = '스토리지 버킷(student-verifications)이 존재하지 않습니다. 관리자에게 문의하세요.';
-      } else if (uploadErr.message.includes('row-level security') || uploadErr.statusCode === '403') {
-        uploadMsg = '스토리지 권한 오류 (RLS): Storage 정책에서 verifications/{auth_id}/ 경로의 INSERT 권한을 확인하세요.';
-      } else if (uploadErr.message.includes('Duplicate') || uploadErr.statusCode === '409') {
-        uploadMsg = '동일한 파일이 이미 존재합니다. 잠시 후 다시 시도해주세요.';
-      } else if (uploadErr.message.includes('size') || uploadErr.message.includes('limit')) {
-        uploadMsg = `파일 크기 제한 초과 (${fileSizeMB}MB). 더 작은 파일을 사용해주세요.`;
+      const code = uploadErr.statusCode ?? '';
+      const msg  = uploadErr.message ?? '';
+      let guide  = '';
+
+      if (msg.includes('Bucket not found') || msg.includes('bucket')) {
+        guide = '스토리지 버킷(student-verifications)이 없습니다. ' +
+                'Supabase → Storage에서 "student-verifications" 버킷을 생성하세요.';
+      } else if (code === '403' || msg.includes('security') || msg.includes('policy') || msg.includes('RLS')) {
+        guide = 'Storage 권한 오류입니다. Supabase → Storage → Policies에서\n' +
+                '"student-verifications" 버킷에 아래 INSERT 정책을 추가하세요:\n' +
+                'USING: bucket_id = \'student-verifications\'\n' +
+                'CHECK: name LIKE \'verifications/\' || auth.uid() || \'/%\'';
+      } else if (code === '409' || msg.includes('Duplicate') || msg.includes('already exists')) {
+        // upsert:true인데도 409면 RLS가 UPDATE도 막는 것 → 정책 안내
+        guide = '파일 중복 오류입니다. 잠시 후 다시 시도해주세요.';
+      } else if (msg.includes('size') || msg.includes('limit') || msg.includes('too large')) {
+        guide = `파일 크기 제한 초과 (${fileSizeMB}MB). 10MB 이하 파일을 사용해주세요.`;
       } else {
-        uploadMsg = `이미지 업로드 실패 [${uploadErr.statusCode ?? 'ERR'}]: ${uploadErr.message}`;
+        guide = `이미지 업로드 실패 [${code}]: ${msg}`;
       }
-      throw new Error(uploadMsg);
+      throw new Error(guide);
     }
 
-    // ── STEP 6: student_verifications 저장
+    // ── STEP 5: student_verifications 저장 (이미 있으면 무시)
     const { error: verifErr } = await _sb.from('student_verifications').insert({
       user_id: profile.id, image_path: filePath, status: 'pending'
     });
@@ -1030,32 +995,25 @@ async function submitVerification() {
       throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
     }
 
-    // ── STEP 7: deposits 초기 레코드
-    const feeAmount = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
-    const { error: depositInitErr } = await _sb.from('deposits').insert({
+    // ── STEP 6: deposits 초기 레코드 (이미 있으면 무시)
+    const fee = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
+    await _sb.from('deposits').insert({
       user_id: profile.id, depositor_name: profile.nickname,
-      amount: feeAmount, status: 'pending_confirm'
+      amount: fee, status: 'pending_confirm'
+    }).catch(e => {
+      if (e?.code !== '23505') console.warn('[SV] deposits 저장 실패(무시):', e?.code, e?.message);
     });
-    if (depositInitErr && depositInitErr.code !== '23505') {
-      console.warn('[submitVerification] deposits 초기 레코드 생성 실패 (무시됨):',
-        depositInitErr.code, depositInitErr.message);
-    }
 
-    // ── 완료 (regData 초기화)
+    // ── 완료
     state.profile = profile;
     state.regData = null;
     setText('home-username', profile.nickname + '님');
-    showToast(sessionResult
-      ? '🎉 가입 완료! 학생증 검토 후 알림드릴게요'
-      : '✅ 가입 정보가 저장되었습니다. 관리자 검토 후 서비스가 활성화됩니다.'
-    );
+    showToast('🎉 가입 완료! 학생증 검토 후 활성화됩니다');
     showScreen('screen-deposit');
 
   } catch (err) {
     console.error('[submitVerification]', err);
-    showToast('❌ ' + err.message);
-    // ★ 치명적 오류 시 regData는 유지 (재시도 가능하게)
-    // 단, "아이디 이미 등록" 케이스는 위에서 직접 null 처리함
+    showToast('❌ ' + err.message, 5000);
   } finally {
     setBtnLoading('btn-verify', false, '업로드 완료');
   }
@@ -2538,13 +2496,9 @@ function triggerUpload() { document.getElementById('file-input')?.click(); }
 function handleFileSelect(input) {
   const file = input.files?.[0];
   if (!file) return;
-  const validation = validateUploadImage(file);
-  if (!validation.ok) {
-    input.value = '';
-    state.uploadedFile = null;
-    showToast(validation.message);
-    return;
-  }
+  const ALLOWED = ['image/jpeg','image/png','image/webp'];
+  if (!ALLOWED.includes(file.type)) { showToast('JPG, PNG 파일만 업로드 가능합니다'); return; }
+  if (file.size > 10*1024*1024)     { showToast('10MB 이하 파일만 업로드 가능합니다'); return; }
   state.uploadedFile = file;
   // textContent로 XSS 방어
   setText('upload-icon',  '✅');
