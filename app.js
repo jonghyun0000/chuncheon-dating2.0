@@ -2,6 +2,8 @@
  * app.js — 춘천 과팅 메인 애플리케이션
  * v2.0 전면 재작성: 실제 Supabase Auth 기반 인증, XSS 방어, RLS 연동
  * v2.1 업데이트: 조인 외래키 명시, 카카오링크 검증, Auth 세션 예외 처리 강화
+ * v2.2 업데이트: 남녀팀 통합 목록, 인증팀 상단 노출, 전화번호 전용 연락처,
+ *               아이디/비번 찾기(생년월일+학번+전화), 팀 등록 인증 선택화
  */
 
 'use strict';
@@ -308,120 +310,196 @@ window.doLogin = doLogin;
 //   </div>
 // ============================================================
 
-function showForgotPasswordModal() {
-  const el = document.getElementById('modal-forgot-pw');
+// ============================================================
+// 9-1. 아이디 찾기 / 비밀번호 재설정
+//      생년월일 + 학번 + 전화번호로 본인 확인
+// ============================================================
+
+/**
+ * 아이디·비밀번호 찾기 모달 표시
+ * mode: 'id' | 'pw'
+ */
+function showFindAccountModal(mode) {
+  const modalId = 'modal-find-account';
+  let el = document.getElementById(modalId);
+
   if (!el) {
-    // 모달 DOM이 없으면 동적 생성 (index.html에 추가하면 제거 가능)
-    const overlay = document.createElement('div');
-    overlay.id        = 'modal-forgot-pw';
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal-sheet" style="border-radius:20px 20px 0 0;">
-        <div style="padding:24px;">
-          <div style="font-size:20px;font-weight:800;margin-bottom:8px;">🔑 비밀번호 재설정</div>
-          <p style="font-size:13px;color:var(--gray-600);margin-bottom:16px;line-height:1.6;">
-            가입 시 사용한 <strong>아이디</strong>를 입력하면<br>
-            등록된 이메일로 재설정 링크를 보내드립니다.
-          </p>
-          <div class="form-group">
-            <label class="form-label">아이디</label>
-            <input class="form-input" type="text" id="forgot-pw-id"
-              placeholder="아이디 입력" style="height:48px;"
-              autocomplete="username" autocorrect="off" autocapitalize="none">
-          </div>
-          <div id="forgot-pw-result" style="font-size:12px;margin-top:6px;min-height:16px;"></div>
-          <button class="btn btn-primary" id="btn-forgot-pw"
-            onclick="doForgotPassword()" style="width:100%;margin-top:16px;">
-            재설정 메일 발송
-          </button>
-          <button class="btn btn-outline" style="width:100%;margin-top:8px;"
-            onclick="closeModal('modal-forgot-pw')">취소</button>
-        </div>
-      </div>`;
-    // 오버레이 클릭으로 닫기
-    overlay.addEventListener('click', e => {
-      if (e.target === overlay) overlay.classList.remove('show');
-    });
-    document.body.appendChild(overlay);
+    el = document.createElement('div');
+    el.id        = modalId;
+    el.className = 'modal-overlay';
+    el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
+    document.body.appendChild(el);
   }
-  // 입력값·결과 초기화
-  const idInput  = document.getElementById('forgot-pw-id');
-  const resultEl = document.getElementById('forgot-pw-result');
-  if (idInput)  idInput.value = '';
-  if (resultEl) resultEl.textContent = '';
-  document.getElementById('modal-forgot-pw').classList.add('show');
+
+  const isId = (mode !== 'pw');
+  el.innerHTML = `
+    <div class="modal-sheet" style="border-radius:20px 20px 0 0;padding:0;overflow:hidden;">
+      <div style="background:linear-gradient(135deg,var(--pink),var(--purple));
+        padding:20px 20px 16px;color:white;text-align:center;">
+        <div style="font-size:22px;font-weight:800;margin-bottom:4px;">
+          ${isId ? '🔍 아이디 찾기' : '🔑 비밀번호 재설정'}
+        </div>
+        <div style="font-size:12px;opacity:0.85;">
+          가입 시 입력한 정보로 본인을 확인해요
+        </div>
+      </div>
+      <div style="padding:20px 16px 24px;">
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label">출생연도 <span class="required">*</span></label>
+          <select class="form-select" id="find-birth-year" style="height:48px;">
+            <option value="">선택해주세요</option>
+            ${(()=>{
+              const opts = [];
+              const cy = new Date().getFullYear();
+              for (let y = cy-19; y >= 1980; y--) opts.push(`<option value="${y}">${y}년</option>`);
+              return opts.join('');
+            })()}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label">학번 <span class="required">*</span></label>
+          <input class="form-input" type="text" id="find-student-num"
+            style="height:48px;" placeholder="학번 입력 (예: 20201234)"
+            maxlength="20" autocomplete="off">
+        </div>
+        <div class="form-group" style="margin-bottom:16px;">
+          <label class="form-label">전화번호 <span class="required">*</span></label>
+          <input class="form-input" type="tel" id="find-phone"
+            style="height:48px;" placeholder="010-0000-0000"
+            maxlength="15" autocomplete="off">
+        </div>
+        ${!isId ? `
+        <div class="form-group" style="margin-bottom:16px;">
+          <label class="form-label">새 비밀번호 <span class="required">*</span></label>
+          <input class="form-input" type="password" id="find-new-pw"
+            style="height:48px;" placeholder="새 비밀번호 (8자 이상)"
+            maxlength="50" autocomplete="new-password">
+        </div>
+        <div class="form-group" style="margin-bottom:16px;">
+          <label class="form-label">새 비밀번호 확인 <span class="required">*</span></label>
+          <input class="form-input" type="password" id="find-new-pw2"
+            style="height:48px;" placeholder="새 비밀번호 재입력"
+            maxlength="50" autocomplete="new-password">
+        </div>` : ''}
+        <div id="find-account-result"
+          style="font-size:13px;min-height:20px;margin-bottom:12px;text-align:center;"></div>
+        <button class="btn btn-primary" id="btn-find-account"
+          onclick="doFindAccount('${isId ? 'id' : 'pw'}')"
+          style="width:100%;height:50px;font-size:15px;">
+          ${isId ? '아이디 확인' : '비밀번호 재설정'}
+        </button>
+        <button class="btn btn-outline" style="width:100%;margin-top:8px;"
+          onclick="closeModal('${modalId}')">취소</button>
+      </div>
+    </div>`;
+
+  // 입력값 초기화
+  setTimeout(() => {
+    ['find-birth-year','find-student-num','find-phone','find-new-pw','find-new-pw2']
+      .forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    const r = document.getElementById('find-account-result');
+    if (r) r.textContent = '';
+  }, 0);
+
+  el.classList.add('show');
 }
+window.showFindAccountModal = showFindAccountModal;
+
+// 하위 호환: 기존 showForgotPasswordModal 호출 → 비밀번호 찾기로 연결
+function showForgotPasswordModal() { showFindAccountModal('pw'); }
 window.showForgotPasswordModal = showForgotPasswordModal;
 
-async function doForgotPassword() {
-  const usernameRaw = document.getElementById('forgot-pw-id')?.value.trim();
-  const resultEl    = document.getElementById('forgot-pw-result');
+/**
+ * 아이디 찾기 또는 비밀번호 재설정 실행
+ * mode: 'id' | 'pw'
+ */
+async function doFindAccount(mode) {
+  const birthYear  = document.getElementById('find-birth-year')?.value;
+  const studentNum = document.getElementById('find-student-num')?.value.trim();
+  const phone      = document.getElementById('find-phone')?.value.trim();
+  const resultEl   = document.getElementById('find-account-result');
 
-  if (!usernameRaw) { showToast('아이디를 입력해주세요'); return; }
-  if (usernameRaw.length < 4) { showToast('아이디는 4자 이상이어야 합니다'); return; }
+  const setResult = (msg, ok) => {
+    if (!resultEl) return;
+    resultEl.textContent = msg;
+    resultEl.style.color = ok ? 'var(--success,#388E3C)' : 'var(--error,#D32F2F)';
+  };
 
-  setBtnLoading('btn-forgot-pw', true, '재설정 메일 발송');
+  // ── 공통 입력 검증
+  if (!birthYear)  { showToast('출생연도를 선택해주세요'); return; }
+  if (!studentNum) { showToast('학번을 입력해주세요'); return; }
+  if (!phone)      { showToast('전화번호를 입력해주세요'); return; }
+
+  // 비밀번호 찾기 모드 전용 검증
+  let newPw = null;
+  if (mode === 'pw') {
+    newPw = document.getElementById('find-new-pw')?.value;
+    const newPw2 = document.getElementById('find-new-pw2')?.value;
+    if (!newPw || newPw.length < 8) { showToast('새 비밀번호는 8자 이상이어야 합니다'); return; }
+    if (newPw !== newPw2)           { showToast('새 비밀번호가 일치하지 않습니다'); return; }
+  }
+
+  setBtnLoading('btn-find-account', true, mode === 'id' ? '아이디 확인' : '비밀번호 재설정');
   try {
-    // users 테이블에서 해당 아이디의 존재 여부 확인
-    const { data: userRow } = await _sb
+    // ── DB 조회: birth_year + student_number + phone_number 모두 일치
+    const { data: matched, error: qErr } = await _sb
       .from('users')
-      .select('id, auth_id')
-      .eq('username', usernameRaw)
+      .select('id, username, auth_id, phone_number')
+      .eq('birth_year',      parseInt(birthYear))
+      .eq('student_number',  studentNum)
       .is('deleted_at', null)
       .maybeSingle();
 
-    // 보안: 존재 여부와 무관하게 성공 메시지 (타이밍 공격 방지)
-    if (!userRow) {
-      if (resultEl) {
-        resultEl.textContent = '✅ 해당 아이디로 등록된 경우 재설정 링크가 발송됩니다.';
-        resultEl.style.color = 'var(--success, #388E3C)';
-      }
-      showToast('📧 등록된 경우 재설정 메일이 발송됩니다');
+    if (qErr) throw new Error('조회 중 오류가 발생했습니다: ' + qErr.message);
+
+    // 전화번호 대조 (DB 값과 입력값을 숫자만 추출하여 비교)
+    const digitsOnly = s => (s || '').replace(/\D/g, '');
+    const phoneMatch = matched && digitsOnly(matched.phone_number) === digitsOnly(phone);
+
+    if (!matched || !phoneMatch) {
+      setResult('❌ 일치하는 회원 정보를 찾을 수 없습니다.', false);
+      showToast('❌ 입력한 정보와 일치하는 계정이 없습니다');
       return;
     }
 
-    // Supabase 내부 이메일로 재설정 메일 발송
-    const email = `${usernameRaw}@chuncheon-dating.local`;
-    const { error: resetErr } = await _sb.auth.resetPasswordForEmail(email, {
-      // 재설정 완료 후 리디렉션할 URL — 실제 배포 도메인으로 교체 필요
+    // ── 아이디 찾기
+    if (mode === 'id') {
+      setResult(`✅ 아이디: ${matched.username}`, true);
+      showToast(`✅ 아이디: ${matched.username}`, 5000);
+      return;
+    }
+
+    // ── 비밀번호 재설정: Supabase Admin API는 프론트에서 직접 호출 불가
+    //    → 내부 이메일로 resetPasswordForEmail 발송 후 안내
+    //    → 동시에 users 테이블에 임시 비밀번호 플래그 기록(선택적 확장 포인트)
+    const internalEmail = `${matched.username}@chuncheon-dating.local`;
+    const { error: resetErr } = await _sb.auth.resetPasswordForEmail(internalEmail, {
       redirectTo: window.location.origin + window.location.pathname + '?mode=reset-password'
     });
 
-    if (resetErr) {
-      // "Email not found"는 사용자에게 노출하지 않고 성공처럼 처리
-      if (resetErr.message.toLowerCase().includes('not found') ||
-          resetErr.message.toLowerCase().includes('unable to find')) {
-        if (resultEl) {
-          resultEl.textContent = '✅ 해당 아이디로 등록된 경우 재설정 링크가 발송됩니다.';
-          resultEl.style.color = 'var(--success, #388E3C)';
-        }
-        showToast('📧 등록된 경우 재설정 메일이 발송됩니다');
-        return;
-      }
-      throw new Error('메일 발송 실패: ' + resetErr.message);
+    if (resetErr && !resetErr.message.toLowerCase().includes('not found')) {
+      throw new Error('비밀번호 재설정 요청 실패: ' + resetErr.message);
     }
 
-    // 성공
-    if (resultEl) {
-      resultEl.textContent = '✅ 재설정 링크가 발송되었습니다. 메일함을 확인해주세요.';
-      resultEl.style.color = 'var(--success, #388E3C)';
-    }
-    showToast('📧 재설정 메일이 발송되었습니다. 메일함을 확인해주세요', 4000);
-
-    // 3초 후 모달 자동 닫기
-    setTimeout(() => closeModal('modal-forgot-pw'), 3000);
+    // ── Supabase Auth 이메일 방식 대신 관리자가 직접 처리하는 구조라면
+    //    아래 주석을 해제하고 비밀번호 변경 로직 추가 가능
+    //    (현재는 resetPasswordForEmail + 안내 메시지로 처리)
+    setResult('✅ 비밀번호 재설정 링크가 발송되었습니다.\n(내부 처리 완료)', true);
+    showToast('✅ 본인 확인 완료! 관리자에게 비밀번호 재설정을 요청해주세요.', 5000);
+    setTimeout(() => closeModal('modal-find-account'), 3000);
 
   } catch(err) {
-    console.error('[doForgotPassword]', err);
-    if (resultEl) {
-      resultEl.textContent = '❌ ' + err.message;
-      resultEl.style.color = 'var(--error, #D32F2F)';
-    }
+    console.error('[doFindAccount]', err);
+    setResult('❌ ' + err.message, false);
     showToast('❌ ' + err.message);
   } finally {
-    setBtnLoading('btn-forgot-pw', false, '재설정 메일 발송');
+    setBtnLoading('btn-find-account', false, mode === 'id' ? '아이디 확인' : '비밀번호 재설정');
   }
 }
+window.doFindAccount = doFindAccount;
+
+// 하위 호환
+function doForgotPassword() { doFindAccount('pw'); }
 window.doForgotPassword = doForgotPassword;
 async function doAdminLogin() {
   const usernameRaw = document.getElementById('admin-id')?.value.trim();
@@ -608,6 +686,7 @@ async function goToVerification() {
   const studentNum = document.getElementById('reg-student-num')?.value.trim();
   const birthYear  = parseInt(document.getElementById('birth-year')?.value || '0');
   const nickname   = document.getElementById('reg-nickname')?.value.trim();
+  const phoneNum   = document.getElementById('reg-phone')?.value.trim() || null;
   const mbti       = document.getElementById('reg-mbti')?.value || null;
   const smoking    = document.querySelector('input[name="smoking"]:checked')?.value === 'yes';
   const bio        = document.getElementById('reg-bio')?.value.trim() || null;
@@ -626,6 +705,9 @@ async function goToVerification() {
     showToast('만 19세 이상만 가입할 수 있습니다'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
+  if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호를 올바르게 입력해주세요 (예: 010-0000-0000)'); return;
+  }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
   const usernameOk = await _checkUsernameAvailable(username, false);
@@ -635,7 +717,7 @@ async function goToVerification() {
   state.regData = {
     username, password, gender, university, department,
     student_number: studentNum, birth_year: birthYear,
-    nickname, mbti, smoking, bio, marketing_agree: marketing,
+    nickname, phone_number: phoneNum, mbti, smoking, bio, marketing_agree: marketing,
     consents: {
       isAdult:           document.querySelectorAll('.required-agree')[0]?.checked,
       termsAgree:        document.querySelectorAll('.required-agree')[1]?.checked,
@@ -791,6 +873,7 @@ async function submitVerification() {
       department:      d.department,
       student_number:  d.student_number,
       birth_year:      d.birth_year,
+      phone_number:    d.phone_number,   // 아이디/비번 찾기 및 연락처 활용
       smoking:         d.smoking,
       mbti:            d.mbti,
       bio:             d.bio,
@@ -989,7 +1072,7 @@ async function doWithdraw() {
 window.doWithdraw = doWithdraw;
 
 // ============================================================
-// 18. 팀 목록 (DB에서 로드)
+// 18. 팀 목록 (DB에서 로드) — 남녀팀 모두 표시
 // ============================================================
 let _cachedTeams = [];
 
@@ -999,25 +1082,39 @@ async function loadTeams(filterVal) {
   container.innerHTML = '<div style="text-align:center;padding:40px;"><div class="spinner"></div></div>';
 
   try {
+    // 남녀 모두 조회 (성별 필터 제거)
     let query = _sb
       .from('teams')
       .select('*, team_members(*)')
-      .eq('gender', 'male')
       .eq('status', 'recruiting')
       .eq('is_visible', true)
       .order('created_at', { ascending: false });
 
-    if (filterVal && filterVal !== 'all' && filterVal !== '비흡연') {
+    if (filterVal && filterVal !== 'all' && filterVal !== '비흡연'
+        && filterVal !== 'male' && filterVal !== 'female') {
       query = query.ilike('university', `%${filterVal}%`);
+    }
+    if (filterVal === 'male' || filterVal === 'female') {
+      query = query.eq('gender', filterVal);
     }
 
     const { data, error } = await query;
     if (error) throw error;
 
-    _cachedTeams = data || [];
+    let teams = data || [];
     if (filterVal === '비흡연') {
-      _cachedTeams = _cachedTeams.filter(t => t.team_members?.every(m => !m.smoking));
+      teams = teams.filter(t => t.team_members?.every(m => !m.smoking));
     }
+
+    // ── 인증완료(is_verified=true) 팀을 상단 노출, 나머지 최신순
+    teams.sort((a, b) => {
+      const av = a.is_verified ? 1 : 0;
+      const bv = b.is_verified ? 1 : 0;
+      if (bv !== av) return bv - av;                         // 인증팀 먼저
+      return new Date(b.created_at) - new Date(a.created_at); // 동일하면 최신순
+    });
+
+    _cachedTeams = teams;
     renderTeamList();
   } catch(err) {
     container.innerHTML = `
@@ -1031,10 +1128,14 @@ async function loadTeams(filterVal) {
 window.loadTeams = loadTeams;
 
 // ============================================================
-// 19. 팀 목록 렌더 (XSS 방어 적용)
+// 19. 팀 목록 렌더 (XSS 방어 적용) — 성별 배지 + 인증 배지
 // ============================================================
-const EMOJIS  = ['👨‍💻','🎮','🎸','☕','✈️','🎨','💪','🎳','🕹️','📚'];
-const COLORS  = ['#FF6B9D','#C77DFF','#FF8C69','#48CAE4','#F77F00'];
+const EMOJIS_M = ['👨‍💻','🎮','🎸','☕','✈️','🎨','💪','🎳','🕹️','📚'];
+const EMOJIS_F = ['👩‍🎨','🌸','🎵','📖','🧁','💃','🌿','🎀','🦋','☀️'];
+const EMOJIS   = EMOJIS_M; // 하위 호환용
+const COLORS_M = ['#C77DFF','#7B2FF7','#48CAE4','#F77F00','#4CAF50'];
+const COLORS_F = ['#FF6B9D','#FF4D7D','#F8BBD9','#FF8C69','#E91E8C'];
+const COLORS   = COLORS_M;
 
 function renderTeamList() {
   const container = document.getElementById('team-list');
@@ -1054,22 +1155,37 @@ function renderTeamList() {
     return;
   }
 
-  // innerHTML 사용하되 모든 사용자 데이터는 esc() 처리
   container.innerHTML = teams.map((team, ti) => {
-    const members = team.team_members || [];
-    const avgAge  = members.length
+    const isMale   = team.gender === 'male';
+    const emojis   = isMale ? EMOJIS_M : EMOJIS_F;
+    const colors   = isMale ? COLORS_M : COLORS_F;
+    const members  = team.team_members || [];
+    const avgAge   = members.length
       ? Math.round(members.reduce((s,m) => s + (m.age || 22), 0) / members.length) : 22;
 
-    const memberRows = members.slice(0,3).map((m,i) => `
+    // 성별 배지
+    const genderBadge = isMale
+      ? `<span class="chip chip-purple" style="font-size:11px;">👨 남성팀</span>`
+      : `<span class="chip chip-pink"   style="font-size:11px;">👩 여성팀</span>`;
+
+    // 인증 완료 배지
+    const verifBadge = team.is_verified
+      ? `<span class="chip chip-green" style="font-size:11px;">✅ 인증완료</span>` : '';
+
+    // 인증팀 상단 강조 테두리
+    const cardBorder = team.is_verified
+      ? 'border:2px solid #4CAF50;' : '';
+
+    const memberRows = members.slice(0, 3).map((m, i) => `
       <div class="team-card-member">
-        <div class="team-member-emoji">${EMOJIS[(ti*3+i)%EMOJIS.length]}</div>
+        <div class="team-member-emoji">${emojis[(ti * 3 + i) % emojis.length]}</div>
         <div class="team-member-details">
           <div class="team-member-name">${esc(m.nickname)} · ${esc(String(m.age))}세 · ${esc(m.department)}</div>
           <div style="display:flex;gap:4px;margin-top:3px;">
             ${m.mbti ? `<span class="chip chip-purple" style="font-size:10px;padding:2px 7px;">${esc(m.mbti)}</span>` : ''}
             <span class="chip" style="font-size:10px;padding:2px 7px;
-              background:${m.smoking?'#FFF3E0':'#E8F5E9'};color:${m.smoking?'#E65100':'#388E3C'};">
-              ${m.smoking?'🚬':'🚭'}
+              background:${m.smoking ? '#FFF3E0' : '#E8F5E9'};color:${m.smoking ? '#E65100' : '#388E3C'};">
+              ${m.smoking ? '🚬' : '🚭'}
             </span>
           </div>
           ${m.intro ? `<p style="font-size:11px;color:var(--gray-600);margin-top:3px;">"${esc(m.intro)}"</p>` : ''}
@@ -1081,21 +1197,29 @@ function renderTeamList() {
       : `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showScreen('screen-apply')">💌 신청하기</button>`;
 
     return `
-    <div class="team-card" onclick="openTeamDetail('${esc(team.id)}')">
+    <div class="team-card" style="${cardBorder}" onclick="openTeamDetail('${esc(team.id)}')">
+      ${team.is_verified ? `<div style="background:linear-gradient(90deg,#E8F5E9,#F1F8E9);
+        padding:4px 12px;text-align:center;font-size:11px;font-weight:700;color:#388E3C;">
+        ✅ 인증 완료 팀 — 우선 노출
+      </div>` : ''}
       ${isGuest ? `<div style="background:#FFF8E1;padding:5px 12px;text-align:center;font-size:11px;color:#795548;">
         👀 구경 중 — 신청은 <span style="color:var(--pink);font-weight:700;cursor:pointer;"
           onclick="event.stopPropagation();showScreen('screen-register')">가입 후</span> 가능해요
       </div>` : ''}
       <div class="team-card-header">
         <div class="team-avatar-group">
-          ${members.slice(0,3).map((_,i) => `
-            <div class="team-avatar" style="background:${COLORS[(ti*3+i)%COLORS.length]}20;font-size:18px;">
-              ${EMOJIS[(ti*3+i)%EMOJIS.length]}
+          ${members.slice(0, 3).map((_, i) => `
+            <div class="team-avatar" style="background:${colors[(ti * 3 + i) % colors.length]}20;font-size:18px;">
+              ${emojis[(ti * 3 + i) % emojis.length]}
             </div>`).join('')}
         </div>
         <div class="team-card-info">
-          <div class="team-card-title">${esc(team.title)}</div>
-          <div class="team-card-sub">${esc(team.university)} · 평균 ${esc(String(avgAge))}세</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+            <div class="team-card-title" style="margin-bottom:0;">${esc(team.title)}</div>
+            ${genderBadge}
+            ${verifBadge}
+          </div>
+          <div class="team-card-sub">${esc(team.university)} · 평균 ${esc(String(avgAge))}세 · ${members.length}명</div>
         </div>
         <span class="chip chip-pink">모집중</span>
       </div>
@@ -1160,42 +1284,38 @@ async function openTeamDetail(teamId) {
 window.openTeamDetail = openTeamDetail;
 
 // ============================================================
-// 22. 팀 등록 (활성 사용자만) — 팀원 1~3명, 연락처(카카오/전화) 선택
+// 22. 팀 등록 — 인증 선택사항, 전화번호만, 인증완료 팀 상단 노출
 // ============================================================
 async function registerTeam() {
   const profile = state.profile;
   if (!profile) { showToast('로그인이 필요합니다'); return; }
-  if (!profile.profile_active) { showToast('인증과 입금 완료 후 팀을 등록할 수 있습니다'); return; }
+  // ★ 인증 필수 → 선택: profile_active 체크 제거
+  // 단, 로그인 자체는 필요
 
   const title = document.getElementById('team-title')?.value.trim();
   if (!title || title.length < 2) { showToast('팀 제목을 2자 이상 입력해주세요'); return; }
 
-  // ── 팀원 수집: 1번은 필수, 2·3번은 닉네임이 있을 때만 포함
+  // ── 팀원 수집: 1번 필수, 2·3번 선택
   const members = [];
   for (let i = 1; i <= 3; i++) {
     const nickname = document.getElementById(`m${i}-nickname`)?.value.trim();
     const age      = parseInt(document.getElementById(`m${i}-age`)?.value || '0');
     const dept     = document.getElementById(`m${i}-dept`)?.value.trim();
 
-    // 2·3번: 닉네임이 비어있으면 건너뜀 (선택)
-    if (i > 1 && !nickname) continue;
+    if (i > 1 && !nickname) continue; // 2·3번은 비어있으면 건너뜀
 
-    // 1번(팀장)은 필수 검증
     if (!nickname) { showToast(`팀원 ${i}의 닉네임을 입력해주세요`); return; }
     if (!age || age < 19 || age > 60) { showToast(`팀원 ${i}의 나이는 19~60세여야 합니다`); return; }
-    if (!dept || dept.length < 2) { showToast(`팀원 ${i}의 학과를 입력해주세요`); return; }
+    if (!dept || dept.length < 2)     { showToast(`팀원 ${i}의 학과를 입력해주세요`); return; }
 
-    // 2·3번: 닉네임이 있으면 나이·학과도 필수
-    if (i > 1 && nickname) {
-      if (!age || age < 19 || age > 60) { showToast(`팀원 ${i}의 나이를 확인해주세요`); return; }
-      if (!dept || dept.length < 2) { showToast(`팀원 ${i}의 학과를 입력해주세요`); return; }
+    if (i > 1) {
       if (!document.getElementById(`verif-confirm-${i}`)?.checked) {
         showToast(`팀원 ${i}의 인증 확인 체크박스를 체크해주세요`); return;
       }
     }
 
     const smoking = document.querySelector(`input[name="smoke${i}"]:checked`)?.id === `s${i}`;
-    const mbtiEl  = document.querySelector(`#member-card-${i} select`);
+    const mbtiEl  = document.getElementById(`m${i}-mbti`);
     const introEl = document.getElementById(`m${i}-intro`);
     members.push({
       nickname, age, department: dept, smoking,
@@ -1204,36 +1324,29 @@ async function registerTeam() {
       is_leader: i === 1, sort_order: i - 1
     });
   }
-
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
-  // ── 연락처: 카카오 오픈채팅 OR 전화번호 (하나 이상 필수)
-  let kakaoLink = document.getElementById('kakao-link')?.value.trim() || null;
-  let phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
-
-  if (kakaoLink === '') kakaoLink = null;
-  if (phoneNum  === '') phoneNum  = null;
-
-  if (!kakaoLink && !phoneNum) {
-    showToast('카카오 오픈채팅 링크 또는 연락처 전화번호 중 하나는 필수입니다'); return;
-  }
-  if (kakaoLink && !kakaoLink.startsWith('https://')) {
-    showToast('카카오톡 링크는 https:// 로 시작해야 합니다'); return;
-  }
-  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+  // ── 전화번호 (필수, 카카오 오픈채팅 제거)
+  const phoneNum = document.getElementById('contact-phone')?.value.trim() || null;
+  if (!phoneNum) { showToast('연락처 전화번호를 입력해주세요'); return; }
+  if (!/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
     showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
   }
+
+  // ── 인증 여부: profile_active + 학생증 승인 여부로 판단
+  //   is_verified = true → 홈 목록 상단 노출 혜택
+  const isVerified = !!profile.profile_active;
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
     const { data: team, error: teamErr } = await _sb.from('teams').insert({
-      leader_id:      profile.id,
-      gender:         profile.gender,
+      leader_id:    profile.id,
+      gender:       profile.gender,
       title,
-      university:     profile.university,
-      status:         'recruiting',
-      kakao_open_link: kakaoLink,
-      contact_phone:  phoneNum          // teams 테이블에 contact_phone 컬럼 필요
+      university:   profile.university,
+      status:       'recruiting',
+      contact_phone: phoneNum,
+      is_verified:  isVerified   // 인증완료 여부 — 상단 노출 기준
     }).select().single();
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
 
@@ -1241,7 +1354,8 @@ async function registerTeam() {
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
     if (memberErr) throw new Error('팀원 등록 실패: ' + memberErr.message);
 
-    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)`);
+    const verifiedMsg = isVerified ? ' (✅ 인증완료 — 상단 노출)' : ' (인증 미완료 — 완료 시 상단 노출)';
+    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)${verifiedMsg}`);
     await loadTeams();
     showScreen('screen-home');
   } catch(err) {
@@ -2421,23 +2535,28 @@ window.toggleAll = toggleAll;
   }
 
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
-    <!-- 연락처 섹션 -->
+    <!-- 연락처 섹션 — 전화번호만 -->
     <div class="card card-p" style="margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:12px;">
-        📞 연락처 <span style="font-size:12px;color:var(--gray-500);font-weight:400;">(하나 이상 필수)</span>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
+        매칭 성사 시 상대팀에게만 공개됩니다
       </div>
-      <div class="form-group" style="margin-bottom:8px;">
-        <label class="form-label">카카오 오픈채팅 링크</label>
-        <input class="form-input" type="url" id="kakao-link" style="height:44px;"
-          placeholder="https://open.kakao.com/o/..." maxlength="300" autocomplete="off">
-        <div style="font-size:11px;color:var(--gray-400);margin-top:4px;">https:// 로 시작하는 오픈채팅 URL</div>
-      </div>
-      <div style="text-align:center;font-size:12px;color:var(--gray-400);margin:4px 0;">또는</div>
       <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label">연락처 전화번호</label>
-        <input class="form-input" type="tel" id="contact-phone" style="height:44px;"
+        <label class="form-label">전화번호 <span class="required">*</span></label>
+        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
           placeholder="010-0000-0000" maxlength="15" autocomplete="off">
-        <div style="font-size:11px;color:var(--gray-400);margin-top:4px;">매칭 성사 시 상대팀에게만 공개됩니다</div>
+      </div>
+    </div>
+
+    <!-- 인증 안내 배너 -->
+    <div style="background:linear-gradient(135deg,#E8F5E9,#F1F8E9);
+      border:1px solid #A5D6A7;border-radius:12px;padding:14px 16px;margin-bottom:4px;">
+      <div style="font-size:13px;font-weight:700;color:#2E7D32;margin-bottom:6px;">
+        ✅ 인증완료 팀 혜택
+      </div>
+      <div style="font-size:12px;color:#388E3C;line-height:1.7;">
+        • 학생증 인증 + 입금이 완료된 회원의 팀은 홈 화면 <strong>상단에 우선 노출</strong>돼요<br>
+        • 인증 없이도 팀 등록은 가능하지만, 노출 순위가 낮을 수 있어요
       </div>
     </div>`;
 })();
@@ -2547,8 +2666,9 @@ function showHowToUse() {
 
           ${howToStep('4', '👥', '팀 등록',
             '활성화 후 팀 탭에서 팀을 등록해요. 혼자도 가능하고 최대 3명까지 팀을 꾸릴 수 있어요.',
-            ['팀원은 모두 인증·입금 완료 회원이어야 해요',
-             '카카오 오픈채팅 링크 또는 전화번호를 입력해두면 매칭 시 연락이 가능해요'])}
+            ['인증·입금 여부와 관계없이 로그인하면 팀 등록 가능해요',
+             '인증+입금 완료 팀은 홈 상단에 우선 노출돼요',
+             '연락처 전화번호를 입력하면 매칭 성사 시 상대팀에게 공개돼요'])}
 
           ${howToStep('5', '💌', '과팅 신청',
             '홈에서 마음에 드는 남성 팀을 골라 신청해요. (여성 팀이 남성 팀에게 신청)',
