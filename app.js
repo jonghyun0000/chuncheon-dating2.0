@@ -758,7 +758,7 @@ async function goToVerification() {
   if (!university || university === '')  { showToast('대학교를 선택해주세요'); return; }
   if (!department || department.length < 2){ showToast('학과를 입력해주세요'); return; }
   if (!studentNum || studentNum.length < 6){ showToast('학번을 입력해주세요'); return; }
-  if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 18) {
+  if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 17) {
     showToast('만 18세 이상만 가입할 수 있습니다'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
@@ -1090,31 +1090,11 @@ async function submitDeposit() {
 
   setBtnLoading('btn-deposit', true, '입금 완료했습니다 ✓');
   try {
-    // ★ upsert 대신 기존 레코드 확인 후 INSERT or UPDATE 분기
-    //   → RLS가 UPDATE를 막는 경우 upsert가 실패하므로 안전하게 분기 처리
-    const { data: existing } = await _sb
-      .from('deposits')
-      .select('id, status')
-      .eq('user_id', profile.id)
-      .maybeSingle();
-
-    let dbError;
-    if (existing) {
-      // 이미 레코드가 있으면 UPDATE
-      const { error } = await _sb
-        .from('deposits')
-        .update({ depositor_name: name, amount, status: 'pending_confirm' })
-        .eq('user_id', profile.id);
-      dbError = error;
-    } else {
-      // 없으면 INSERT
-      const { error } = await _sb
-        .from('deposits')
-        .insert({ user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' });
-      dbError = error;
-    }
-
-    if (dbError) throw new Error('입금 신청 저장 실패: ' + dbError.message);
+    const { error } = await _sb.from('deposits').upsert(
+      { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' },
+      { onConflict: 'user_id' }
+    );
+    if (error) throw new Error('입금 신청 저장 실패: ' + error.message);
 
     showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
     showScreen('screen-pending');
@@ -1420,28 +1400,48 @@ async function registerTeam() {
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
-    // ★ contact_phone 컬럼이 DB에 없을 수 있으므로 안전하게 처리
-    //   먼저 contact_phone 포함해서 시도하고, 컬럼 없으면 제외 후 재시도
-    const teamPayload = {
-      leader_id:   profile.id,
-      gender:      profile.gender,
-      title,
-      university:  profile.university,
-      status:      'recruiting',
-      is_verified: isVerified
-    };
+    // ★ DB에 없는 컬럼(is_verified, contact_phone)이 있을 수 있으므로
+    //   단계적으로 제외하며 재시도하는 안전한 INSERT
+    const isMissingCol = (err) =>
+      err?.message?.includes('schema cache') ||
+      err?.message?.includes('Could not find') ||
+      err?.code === 'PGRST204';
 
-    // contact_phone 컬럼 추가 시도 (schema.sql에 컬럼이 있는 경우만 동작)
+    // 시도 1: 전체 컬럼
     let team, teamErr;
     ({ data: team, error: teamErr } = await _sb.from('teams').insert({
-      ...teamPayload,
-      contact_phone: phoneNum
+      leader_id:    profile.id,
+      gender:       profile.gender,
+      title,
+      university:   profile.university,
+      status:       'recruiting',
+      contact_phone: phoneNum,
+      is_verified:  isVerified
     }).select().single());
 
-    // contact_phone 컬럼 없음 오류 → 컬럼 제외 후 재시도
-    if (teamErr && (teamErr.message?.includes('contact_phone') || teamErr.code === 'PGRST204' || teamErr.message?.includes('schema cache'))) {
-      console.warn('[registerTeam] contact_phone 컬럼 없음, 제외 후 재시도');
-      ({ data: team, error: teamErr } = await _sb.from('teams').insert(teamPayload).select().single());
+    // 시도 2: is_verified 제외
+    if (teamErr && isMissingCol(teamErr)) {
+      console.warn('[registerTeam] 컬럼 오류, is_verified 제외 재시도:', teamErr.message);
+      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+        leader_id:    profile.id,
+        gender:       profile.gender,
+        title,
+        university:   profile.university,
+        status:       'recruiting',
+        contact_phone: phoneNum
+      }).select().single());
+    }
+
+    // 시도 3: contact_phone도 제외
+    if (teamErr && isMissingCol(teamErr)) {
+      console.warn('[registerTeam] 컬럼 오류, contact_phone도 제외 재시도:', teamErr.message);
+      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+        leader_id:  profile.id,
+        gender:     profile.gender,
+        title,
+        university: profile.university,
+        status:     'recruiting'
+      }).select().single());
     }
 
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
@@ -1450,8 +1450,7 @@ async function registerTeam() {
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
     if (memberErr) throw new Error('팀원 등록 실패: ' + memberErr.message);
 
-    const verifiedMsg = isVerified ? ' (✅ 인증완료 — 상단 노출)' : ' (인증 미완료 — 완료 시 상단 노출)';
-    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)${verifiedMsg}`);
+    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)`);
     await loadTeams();
     showScreen('screen-home');
   } catch(err) {
@@ -2614,8 +2613,8 @@ window.toggleAll = toggleAll;
   if (!sel) return;
   const cy = new Date().getFullYear();
   const fragment = document.createDocumentFragment();
-  // 만 18세(cy-18) ~ 1980년생까지 표시
-  for (let y = cy - 18; y >= 1980; y--) {
+  // 만 18세(cy-17) ~ 1980년생까지 표시 (07년생 포함)
+  for (let y = cy - 17; y >= 1980; y--) {
     const opt = document.createElement('option');
     opt.value = y;
     opt.textContent = y + '년';
