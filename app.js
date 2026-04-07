@@ -331,9 +331,10 @@ function showFindAccountModal(mode) {
     document.body.appendChild(el);
   }
 
-  const isId = (mode !== 'pw');
+  // ★ 모드를 전역에 저장 — innerHTML 내부의 onclick에서 접근 가능
+  window._findAccountMode = (mode === 'pw') ? 'pw' : 'id';
+  const isId = (window._findAccountMode === 'id');
 
-  // ── innerHTML로 모달 내용 교체 (매번 최신 mode로 렌더)
   el.innerHTML = `
     <div class="modal-sheet" style="border-radius:20px 20px 0 0;padding:0;overflow:hidden;
       max-height:90vh;overflow-y:auto;">
@@ -382,7 +383,9 @@ function showFindAccountModal(mode) {
         <div id="find-account-result"
           style="font-size:13px;min-height:20px;margin-bottom:12px;
             text-align:center;white-space:pre-line;line-height:1.6;"></div>
-        <button class="btn btn-primary" id="btn-find-account"
+        <!-- ★ onclick에 window._findAccountMode 사용 → 항상 현재 모드 참조 -->
+        <button class="btn btn-primary"
+          onclick="doFindAccount(window._findAccountMode)"
           style="width:100%;height:50px;font-size:15px;">
           ${isId ? '아이디 확인' : '비밀번호 재설정'}
         </button>
@@ -391,25 +394,10 @@ function showFindAccountModal(mode) {
       </div>
     </div>`;
 
-  // ── onclick을 innerHTML 밖에서 addEventListener로 연결 (인라인 onclick 우회)
-  const btnFind = el.querySelector('#btn-find-account');
-  if (btnFind) {
-    btnFind.addEventListener('click', () => doFindAccount(isId ? 'id' : 'pw'));
-  }
-
-  // 입력값 초기화 (다음 틱에 DOM 확정 후)
-  setTimeout(() => {
-    ['find-birth-year','find-student-num','find-phone','find-new-pw','find-new-pw2']
-      .forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
-    const r = document.getElementById('find-account-result');
-    if (r) r.textContent = '';
-  }, 0);
-
   el.classList.add('show');
 }
 window.showFindAccountModal = showFindAccountModal;
 
-// 하위 호환
 function showForgotPasswordModal() { showFindAccountModal('pw'); }
 window.showForgotPasswordModal = showForgotPasswordModal;
 
@@ -422,7 +410,9 @@ async function doFindAccount(mode) {
   const studentNum = document.getElementById('find-student-num')?.value.trim();
   const phone      = document.getElementById('find-phone')?.value.trim();
   const resultEl   = document.getElementById('find-account-result');
-  const btnEl      = document.getElementById('btn-find-account');
+  // ★ 버튼에 id가 없으므로 모달 내 첫 번째 .btn-primary 버튼을 참조
+  const modalEl    = document.getElementById('modal-find-account');
+  const btnEl      = modalEl?.querySelector('button.btn.btn-primary');
 
   const setResult = (msg, ok) => {
     if (!resultEl) return;
@@ -805,7 +795,7 @@ async function submitVerification() {
   const file = fileInput?.files?.[0];
   if (!file) { showToast('학생증 이미지를 업로드해주세요'); return; }
 
-  // ── 파일 검증: 타입·확장자·크기 (이전 버전 유지)
+  // ── 파일 검증
   const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
   const ALLOWED_EXTS  = ['jpg', 'jpeg', 'png', 'webp'];
   const fileExt = file.name.split('.').pop().toLowerCase().replace(/[^a-z]/g, '');
@@ -828,154 +818,140 @@ async function submitVerification() {
   try {
 
     // ══════════════════════════════════════════════════════════
-    // STEP 1 — Supabase Auth 계정 생성
+    // STEP 1 — Supabase Auth 계정 생성 (멱등성 보장)
+    //
+    // ★ 핵심 수정: 이전 시도에서 signUp은 성공했지만 이후 단계
+    //   (Storage 업로드 등)에서 실패했을 경우, 재시도 시
+    //   "already registered" 오류가 발생한다.
+    //   → "already registered" 오류를 catch해 기존 계정으로
+    //     로그인 세션을 복구한 뒤 나머지 단계를 이어서 진행한다.
     // ══════════════════════════════════════════════════════════
     const email = `${d.username}@chuncheon-dating.local`;
-    const { data: authData, error: authErr } = await _sb.auth.signUp({
-      email,
-      password: d.password,
-      options: { data: { username: d.username } }
-    });
 
-    if (authErr) {
-      if (authErr.message.includes('already registered') || authErr.message.includes('User already registered')) {
-        throw new Error('이미 사용 중인 아이디입니다. 다른 아이디를 입력해주세요.');
-      }
-      throw new Error(`계정 생성 실패 (${authErr.status ?? 'ERR'}): ${authErr.message}`);
-    }
+    let signUpUid = null;
+    let sessionResult = null;
 
-    // signUp이 에러 없이 반환됐더라도 user 객체가 없으면 진행 불가
-    const authUser = authData?.user;
-    if (!authUser?.id) {
-      throw new Error('계정 생성 응답이 올바르지 않습니다. 잠시 후 다시 시도해주세요.');
-    }
-
-    // signUp 응답의 user.id — 이후 모든 단계에서 이 값을 신뢰의 기준으로 삼는다
-    const signUpUid = authUser.id;
-
-    // UUID 형식 사전 검증 (잘못된 값이 DB 경로나 RLS에 흘러들지 않도록)
-    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!UUID_REGEX.test(signUpUid)) {
-      throw new Error(`계정 ID 형식이 올바르지 않습니다 (${esc(signUpUid)}). 관리자에게 문의하세요.`);
-    }
-
-    // ══════════════════════════════════════════════════════════
-    // STEP 2 — 세션 확정 대기
-    //
-    // 이유: signUp 직후 클라이언트의 JWT 쿠키/localStorage 반영이
-    //       수 백ms 지연될 수 있다. 이 시점에 INSERT를 보내면
-    //       auth.uid()가 null 로 평가되어 RLS(42501)가 발생한다.
-    //
-    // - "Confirm Email = OFF": _waitForSession이 첫 폴링(300ms)에 성공
-    // - "Confirm Email = ON" : 세션이 영구적으로 발급되지 않으므로 timeout → null 반환
-    // ══════════════════════════════════════════════════════════
-    const sessionResult = await _waitForSession(signUpUid);
-
-    // 세션이 확인된 경우: 세션의 uid가 signUp uid와 반드시 일치해야 한다
-    if (sessionResult) {
-      if (sessionResult.userId !== signUpUid) {
-        // uid 불일치 — 혼선이 생긴 세션이므로 즉시 정리 후 중단
-        await _sb.auth.signOut().catch(() => {});
-        throw new Error(
-          `세션 uid 불일치: 예상(${esc(signUpUid)}) ≠ 실제(${esc(sessionResult.userId)}). ` +
-          '관리자에게 문의하세요.'
-        );
-      }
-      console.info('[submitVerification] 세션 확정 완료 uid:', signUpUid);
+    // 먼저 현재 세션에 이미 이 계정으로 로그인된 상태인지 확인
+    const { data: { session: existingSession } } = await _sb.auth.getSession();
+    if (existingSession?.user?.email === email) {
+      // 이전 시도에서 이미 signUp+세션까지 성공한 경우 — 그대로 재사용
+      signUpUid = existingSession.user.id;
+      sessionResult = { session: existingSession, userId: signUpUid };
+      console.info('[submitVerification] 기존 세션 재사용 uid:', signUpUid);
     } else {
-      // 세션 timeout — "Confirm Email = ON" 환경
-      console.warn(
-        '[submitVerification] 세션 대기 timeout. ' +
-        'Supabase Dashboard → Authentication → Providers → Email → "Confirm email" 을 OFF로 설정하면 ' +
-        '가입 즉시 세션이 발급됩니다. 현재는 세션 없이 이후 단계를 진행합니다.'
-      );
-    }
+      const { data: authData, error: authErr } = await _sb.auth.signUp({
+        email,
+        password: d.password,
+        options: { data: { username: d.username } }
+      });
 
-    // ══════════════════════════════════════════════════════════
-    // STEP 3 — users 테이블 프로필 저장
-    //
-    // auth_id 에 signUpUid 를 명시적으로 전달한다.
-    // RLS 정책: INSERT 허용 조건이 auth.uid() = auth_id 라면
-    //   → 세션이 확정된 뒤 이 INSERT가 실행되므로 42501 해소됨
-    //   → 세션이 없는 경우(Confirm Email ON): anon INSERT 정책이
-    //     별도로 존재해야 하며, 없으면 아래 에러 분기에서 안내함
-    // ══════════════════════════════════════════════════════════
-    const insertPayload = {
-      auth_id:         signUpUid,   // ★ RLS auth.uid() 매칭 핵심 필드
-      username:        d.username,
-      nickname:        d.nickname,
-      gender:          d.gender,
-      role:            'user',
-      university:      d.university,
-      department:      d.department,
-      student_number:  d.student_number,
-      birth_year:      d.birth_year,
-      phone_number:    d.phone_number,   // 아이디/비번 찾기 및 연락처 활용
-      smoking:         d.smoking,
-      mbti:            d.mbti,
-      bio:             d.bio,
-      marketing_agree: d.marketing_agree,
-      profile_active:  false
-    };
+      if (authErr) {
+        const alreadyExists =
+          authErr.message.includes('already registered') ||
+          authErr.message.includes('User already registered') ||
+          authErr.message.includes('user_already_exists');
 
-    // auth_id 이중 검증: insert 직전 payload 값과 signUpUid가 동일한지 재확인
-    if (insertPayload.auth_id !== signUpUid) {
-      throw new Error('auth_id 내부 검증 실패: insert payload가 signUp uid와 다릅니다.');
-    }
+        if (alreadyExists) {
+          // ★ 재시도 케이스: Auth 계정은 이미 있음 → 기존 계정으로 로그인해서 uid 획득
+          console.warn('[submitVerification] Auth 계정 이미 존재 → 로그인으로 uid 복구 시도');
+          const { data: signInData, error: signInErr } = await _sb.auth.signInWithPassword({
+            email, password: d.password
+          });
+          if (signInErr) {
+            // 비밀번호가 다른 경우 → 완전히 다른 사람의 계정일 수 있으므로 중단
+            state.regData = null; // regData 초기화해 무한 재시도 방지
+            throw new Error('아이디가 이미 등록되어 있습니다. 다른 아이디로 처음부터 다시 시도해주세요.');
+          }
+          signUpUid     = signInData.user.id;
+          sessionResult = { session: signInData.session, userId: signUpUid };
+          console.info('[submitVerification] 기존 계정 로그인 성공, uid:', signUpUid);
+        } else {
+          throw new Error(`계정 생성 실패 (${authErr.status ?? 'ERR'}): ${authErr.message}`);
+        }
+      } else {
+        const authUser = authData?.user;
+        if (!authUser?.id) {
+          throw new Error('계정 생성 응답이 올바르지 않습니다. 잠시 후 다시 시도해주세요.');
+        }
+        signUpUid = authUser.id;
 
-    const { data: profile, error: profileErr } = await _sb
-      .from('users')
-      .insert(insertPayload)
-      .select()
-      .single();
+        // UUID 형식 검증
+        const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!UUID_REGEX.test(signUpUid)) {
+          throw new Error(`계정 ID 형식이 올바르지 않습니다 (${esc(signUpUid)}). 관리자에게 문의하세요.`);
+        }
 
-    if (profileErr) {
-      // 프로필 저장 실패 시 Auth 계정도 정리 (세션 있을 때만 가능)
-      if (sessionResult) await _sb.auth.signOut().catch(() => {});
-
-      let profileHint = '';
-      if (profileErr.code === '23505') {
-        profileHint = ' → 이미 가입된 아이디입니다. 다른 아이디로 다시 시도해주세요.';
-      } else if (profileErr.code === '42501') {
-        profileHint = sessionResult
-          ? ' → RLS 정책이 auth.uid() = auth_id 조건을 통과하지 못했습니다. ' +
-            'Supabase SQL Editor에서 users INSERT 정책을 확인하세요.'
-          : ' → 세션 없이 INSERT가 차단되었습니다. ' +
-            'Supabase Dashboard에서 "Confirm email"을 OFF로 설정하거나, ' +
-            'anon role에 대한 users INSERT 정책을 추가해주세요.';
+        // ── STEP 2: 세션 확정 대기 (신규 signUp만 필요)
+        sessionResult = await _waitForSession(signUpUid);
+        if (!sessionResult) {
+          console.warn('[submitVerification] 세션 대기 timeout — Confirm Email 설정 확인 필요');
+        }
       }
-      throw new Error(`프로필 저장 실패 [${profileErr.code}]${profileHint}: ${profileErr.message}`);
     }
 
-    // 저장된 프로필의 auth_id가 signUpUid와 일치하는지 최종 확인
-    if (profile.auth_id !== signUpUid) {
-      console.error('[submitVerification] profile.auth_id 불일치!', profile.auth_id, '≠', signUpUid);
-      throw new Error('저장된 프로필의 auth_id가 계정 uid와 일치하지 않습니다. 관리자에게 문의하세요.');
-    }
+    // uid가 없으면 진행 불가
+    if (!signUpUid) throw new Error('계정 uid를 확인할 수 없습니다. 관리자에게 문의하세요.');
 
     // ══════════════════════════════════════════════════════════
-    // STEP 4 — 동의 항목 저장 (비치명적)
+    // STEP 3 — users 테이블 프로필 저장 (멱등성: 이미 있으면 스킵)
     // ══════════════════════════════════════════════════════════
+
+    // 이미 프로필이 있는지 확인 (재시도 케이스)
+    let profile = null;
+    const { data: existingProfile } = await _sb
+      .from('users').select('*').eq('auth_id', signUpUid).maybeSingle();
+
+    if (existingProfile) {
+      // 이전 시도에서 이미 프로필이 저장된 경우 → 재사용
+      profile = existingProfile;
+      console.info('[submitVerification] 기존 프로필 재사용 id:', profile.id);
+    } else {
+      const insertPayload = {
+        auth_id:         signUpUid,
+        username:        d.username,
+        nickname:        d.nickname,
+        gender:          d.gender,
+        role:            'user',
+        university:      d.university,
+        department:      d.department,
+        student_number:  d.student_number,
+        birth_year:      d.birth_year,
+        phone_number:    d.phone_number,
+        smoking:         d.smoking,
+        mbti:            d.mbti,
+        bio:             d.bio,
+        marketing_agree: d.marketing_agree,
+        profile_active:  false
+      };
+
+      const { data: newProfile, error: profileErr } = await _sb
+        .from('users').insert(insertPayload).select().single();
+
+      if (profileErr) {
+        if (sessionResult) await _sb.auth.signOut().catch(() => {});
+        let hint = '';
+        if (profileErr.code === '23505') hint = ' → 아이디 중복. 다른 아이디로 처음부터 다시 시작하세요.';
+        else if (profileErr.code === '42501') hint = ' → RLS 권한 오류. Supabase users INSERT 정책을 확인하세요.';
+        state.regData = null; // 에러 시 regData 초기화
+        throw new Error(`프로필 저장 실패 [${profileErr.code}]${hint}: ${profileErr.message}`);
+      }
+      profile = newProfile;
+    }
+
+    // ── STEP 4: 동의 항목 저장 (비치명적)
     const c = d.consents;
     const { error: consentErr } = await _sb.from('terms_consents').insert({
-      user_id:            profile.id,
-      is_adult:           true,
-      terms_agree:        true,
-      privacy_agree:      true,
-      verification_agree: true,
-      deposit_agree:      true,
-      falsify_agree:      true,
-      marketing_agree:    !!c.marketingAgree
+      user_id: profile.id, is_adult: true, terms_agree: true,
+      privacy_agree: true, verification_agree: true,
+      deposit_agree: true, falsify_agree: true,
+      marketing_agree: !!c.marketingAgree
     });
-    if (consentErr) {
-      // 동의 저장 실패는 가입 흐름을 중단시키지 않고 경고만 기록
+    if (consentErr && consentErr.code !== '23505') {
       console.warn('[submitVerification] 동의 항목 저장 실패 (무시됨):', consentErr.message);
     }
 
     // ══════════════════════════════════════════════════════════
     // STEP 5 — 학생증 Storage 업로드
-    //   경로: verifications/{signUpUid}/{timestamp}.{ext}
-    //   signUpUid는 STEP 1에서 UUID_REGEX 검증 완료
     // ══════════════════════════════════════════════════════════
     const safeName = `${Date.now()}.${fileExt}`;
     const filePath = `verifications/${signUpUid}/${safeName}`;
@@ -1000,40 +976,26 @@ async function submitVerification() {
       throw new Error(uploadMsg);
     }
 
-    // ══════════════════════════════════════════════════════════
-    // STEP 6 — student_verifications 테이블 저장
-    //          관리자 페이지 인증 탭 데이터 노출을 위해 반드시 await
-    // ══════════════════════════════════════════════════════════
+    // ── STEP 6: student_verifications 저장
     const { error: verifErr } = await _sb.from('student_verifications').insert({
-      user_id:    profile.id,
-      image_path: filePath,
-      status:     'pending'
+      user_id: profile.id, image_path: filePath, status: 'pending'
     });
-    if (verifErr) {
+    if (verifErr && verifErr.code !== '23505') {
       throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
     }
 
-    // ══════════════════════════════════════════════════════════
-    // STEP 7 — deposits 테이블 초기 레코드 생성
-    //   관리자 입금 탭에서 데이터가 노출되려면 가입 시점에
-    //   레코드가 존재해야 한다. 입금자명은 닉네임으로 임시 설정.
-    // ══════════════════════════════════════════════════════════
+    // ── STEP 7: deposits 초기 레코드
     const feeAmount = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
     const { error: depositInitErr } = await _sb.from('deposits').insert({
-      user_id:        profile.id,
-      depositor_name: profile.nickname,   // 실제 입금 시 submitDeposit에서 덮어씀
-      amount:         feeAmount,
-      status:         'pending_confirm'
+      user_id: profile.id, depositor_name: profile.nickname,
+      amount: feeAmount, status: 'pending_confirm'
     });
-    // 이미 레코드가 있거나 충돌(23505)이면 무시 — submitDeposit에서 upsert 처리
     if (depositInitErr && depositInitErr.code !== '23505') {
       console.warn('[submitVerification] deposits 초기 레코드 생성 실패 (무시됨):',
         depositInitErr.code, depositInitErr.message);
     }
 
-    // ══════════════════════════════════════════════════════════
-    // 완료
-    // ══════════════════════════════════════════════════════════
+    // ── 완료 (regData 초기화)
     state.profile = profile;
     state.regData = null;
     setText('home-username', profile.nickname + '님');
@@ -1046,6 +1008,8 @@ async function submitVerification() {
   } catch (err) {
     console.error('[submitVerification]', err);
     showToast('❌ ' + err.message);
+    // ★ 치명적 오류 시 regData는 유지 (재시도 가능하게)
+    // 단, "아이디 이미 등록" 케이스는 위에서 직접 null 처리함
   } finally {
     setBtnLoading('btn-verify', false, '업로드 완료');
   }
