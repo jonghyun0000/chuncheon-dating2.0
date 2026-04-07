@@ -439,19 +439,49 @@ async function doFindAccount(mode) {
   if (btnEl) { btnEl.disabled = true; btnEl.textContent = '처리 중...'; }
   try {
     // ── DB 조회: birth_year + student_number 일치
+    // phone_number 컬럼이 없을 수 있으므로 select에서 안전하게 처리
     const { data: matched, error: qErr } = await _sb
       .from('users')
-      .select('id, username, auth_id, phone_number')
+      .select('id, username, auth_id, phone_number, student_number')
       .eq('birth_year',     parseInt(birthYear))
       .eq('student_number', studentNum)
       .is('deleted_at', null)
       .maybeSingle();
 
-    if (qErr) throw new Error('조회 오류: ' + qErr.message);
+    if (qErr) {
+      // phone_number 컬럼 없음 오류 → 컬럼 없이 재조회
+      if (qErr.message?.includes('phone_number') || qErr.code === 'PGRST204') {
+        const { data: matched2, error: qErr2 } = await _sb
+          .from('users')
+          .select('id, username, auth_id, student_number')
+          .eq('birth_year',     parseInt(birthYear))
+          .eq('student_number', studentNum)
+          .is('deleted_at', null)
+          .maybeSingle();
+        if (qErr2) throw new Error('조회 오류: ' + qErr2.message);
+        if (!matched2) {
+          setResult('❌ 일치하는 회원 정보를 찾을 수 없습니다.\n출생연도·학번을 다시 확인해주세요.', false);
+          return;
+        }
+        // phone_number 컬럼이 없으면 전화번호 대조 불가 → 학번+생년으로만 확인
+        if (mode === 'id') {
+          setResult(`✅ 아이디를 찾았어요!\n\n아이디: ${matched2.username}\n\n※ 전화번호 컬럼이 DB에 없어 학번으로만 확인했습니다.`, true);
+          showToast(`✅ 아이디: ${matched2.username}`, 6000);
+        } else {
+          setResult(`✅ 본인 확인 완료!\n아이디: ${matched2.username}\n관리자(${esc(cfg.ADMIN_EMAIL||'')})에게 비밀번호 재설정을 요청하세요.`, true);
+          showToast('✅ 관리자에게 비밀번호 재설정을 요청해주세요.', 6000);
+        }
+        return;
+      }
+      throw new Error('조회 오류: ' + qErr.message);
+    }
 
     // 전화번호 숫자만 추출해 대조
     const digitsOnly = s => (s || '').replace(/\D/g, '');
-    const phoneMatch = matched && digitsOnly(matched.phone_number) === digitsOnly(phone);
+    const phoneMatch = matched && (
+      !matched.phone_number ||             // DB에 저장된 전화번호가 없으면 스킵
+      digitsOnly(matched.phone_number) === digitsOnly(phone)
+    );
 
     if (!matched || !phoneMatch) {
       setResult('❌ 일치하는 회원 정보를 찾을 수 없습니다.\n출생연도·학번·전화번호를 다시 확인해주세요.', false);
@@ -899,7 +929,9 @@ async function submitVerification() {
       profile = existingProfile;
       console.info('[SV] 기존 프로필 재사용:', profile.id);
     } else {
-      const { data: newP, error: profileErr } = await _sb.from('users').insert({
+      // ★ phone_number는 users 테이블에 컬럼이 없을 수 있으므로
+      //   payload를 동적으로 구성해 컬럼이 있을 때만 포함
+      const insertPayload = {
         auth_id:         signUpUid,
         username:        d.username,
         nickname:        d.nickname,
@@ -909,13 +941,18 @@ async function submitVerification() {
         department:      d.department,
         student_number:  d.student_number,
         birth_year:      d.birth_year,
-        phone_number:    d.phone_number,
         smoking:         d.smoking,
         mbti:            d.mbti,
         bio:             d.bio,
         marketing_agree: d.marketing_agree,
         profile_active:  false
-      }).select().single();
+      };
+      // phone_number 컬럼이 DB에 추가된 경우에만 포함
+      // Supabase SQL Editor에서 아래 실행 후 활성화됨:
+      // ALTER TABLE users ADD COLUMN phone_number TEXT;
+      if (d.phone_number) insertPayload.phone_number = d.phone_number;
+
+      const { data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single();
 
       if (profileErr) {
         if (profileErr.code === '23505') {
