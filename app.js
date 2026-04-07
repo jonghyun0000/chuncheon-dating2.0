@@ -332,28 +332,26 @@ function showFindAccountModal(mode) {
   }
 
   const isId = (mode !== 'pw');
+
+  // ── innerHTML로 모달 내용 교체 (매번 최신 mode로 렌더)
   el.innerHTML = `
-    <div class="modal-sheet" style="border-radius:20px 20px 0 0;padding:0;overflow:hidden;">
+    <div class="modal-sheet" style="border-radius:20px 20px 0 0;padding:0;overflow:hidden;
+      max-height:90vh;overflow-y:auto;">
       <div style="background:linear-gradient(135deg,var(--pink),var(--purple));
-        padding:20px 20px 16px;color:white;text-align:center;">
+        padding:20px 20px 16px;color:white;text-align:center;position:sticky;top:0;z-index:1;">
         <div style="font-size:22px;font-weight:800;margin-bottom:4px;">
           ${isId ? '🔍 아이디 찾기' : '🔑 비밀번호 재설정'}
         </div>
-        <div style="font-size:12px;opacity:0.85;">
-          가입 시 입력한 정보로 본인을 확인해요
-        </div>
+        <div style="font-size:12px;opacity:0.85;">가입 시 입력한 정보로 본인을 확인해요</div>
       </div>
-      <div style="padding:20px 16px 24px;">
+      <div style="padding:20px 16px 28px;">
         <div class="form-group" style="margin-bottom:10px;">
           <label class="form-label">출생연도 <span class="required">*</span></label>
           <select class="form-select" id="find-birth-year" style="height:48px;">
             <option value="">선택해주세요</option>
-            ${(()=>{
-              const opts = [];
-              const cy = new Date().getFullYear();
-              for (let y = cy-19; y >= 1980; y--) opts.push(`<option value="${y}">${y}년</option>`);
-              return opts.join('');
-            })()}
+            ${(()=>{ const o=[],cy=new Date().getFullYear();
+              for(let y=cy-19;y>=1980;y--) o.push(`<option value="${y}">${y}년</option>`);
+              return o.join(''); })()}
           </select>
         </div>
         <div class="form-group" style="margin-bottom:10px;">
@@ -362,14 +360,14 @@ function showFindAccountModal(mode) {
             style="height:48px;" placeholder="학번 입력 (예: 20201234)"
             maxlength="20" autocomplete="off">
         </div>
-        <div class="form-group" style="margin-bottom:16px;">
+        <div class="form-group" style="margin-bottom:${isId ? '16px' : '10px'};">
           <label class="form-label">전화번호 <span class="required">*</span></label>
           <input class="form-input" type="tel" id="find-phone"
             style="height:48px;" placeholder="010-0000-0000"
             maxlength="15" autocomplete="off">
         </div>
         ${!isId ? `
-        <div class="form-group" style="margin-bottom:16px;">
+        <div class="form-group" style="margin-bottom:10px;">
           <label class="form-label">새 비밀번호 <span class="required">*</span></label>
           <input class="form-input" type="password" id="find-new-pw"
             style="height:48px;" placeholder="새 비밀번호 (8자 이상)"
@@ -382,18 +380,24 @@ function showFindAccountModal(mode) {
             maxlength="50" autocomplete="new-password">
         </div>` : ''}
         <div id="find-account-result"
-          style="font-size:13px;min-height:20px;margin-bottom:12px;text-align:center;"></div>
+          style="font-size:13px;min-height:20px;margin-bottom:12px;
+            text-align:center;white-space:pre-line;line-height:1.6;"></div>
         <button class="btn btn-primary" id="btn-find-account"
-          onclick="doFindAccount('${isId ? 'id' : 'pw'}')"
           style="width:100%;height:50px;font-size:15px;">
           ${isId ? '아이디 확인' : '비밀번호 재설정'}
         </button>
         <button class="btn btn-outline" style="width:100%;margin-top:8px;"
-          onclick="closeModal('${modalId}')">취소</button>
+          onclick="closeModal('modal-find-account')">취소</button>
       </div>
     </div>`;
 
-  // 입력값 초기화
+  // ── onclick을 innerHTML 밖에서 addEventListener로 연결 (인라인 onclick 우회)
+  const btnFind = el.querySelector('#btn-find-account');
+  if (btnFind) {
+    btnFind.addEventListener('click', () => doFindAccount(isId ? 'id' : 'pw'));
+  }
+
+  // 입력값 초기화 (다음 틱에 DOM 확정 후)
   setTimeout(() => {
     ['find-birth-year','find-student-num','find-phone','find-new-pw','find-new-pw2']
       .forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
@@ -405,12 +409,12 @@ function showFindAccountModal(mode) {
 }
 window.showFindAccountModal = showFindAccountModal;
 
-// 하위 호환: 기존 showForgotPasswordModal 호출 → 비밀번호 찾기로 연결
+// 하위 호환
 function showForgotPasswordModal() { showFindAccountModal('pw'); }
 window.showForgotPasswordModal = showForgotPasswordModal;
 
 /**
- * 아이디 찾기 또는 비밀번호 재설정 실행
+ * 아이디 찾기 또는 비밀번호 재설정
  * mode: 'id' | 'pw'
  */
 async function doFindAccount(mode) {
@@ -418,19 +422,21 @@ async function doFindAccount(mode) {
   const studentNum = document.getElementById('find-student-num')?.value.trim();
   const phone      = document.getElementById('find-phone')?.value.trim();
   const resultEl   = document.getElementById('find-account-result');
+  const btnEl      = document.getElementById('btn-find-account');
 
   const setResult = (msg, ok) => {
     if (!resultEl) return;
     resultEl.textContent = msg;
-    resultEl.style.color = ok ? 'var(--success,#388E3C)' : 'var(--error,#D32F2F)';
+    resultEl.style.color = ok ? '#388E3C' : '#D32F2F';
+    resultEl.style.fontWeight = '600';
   };
 
-  // ── 공통 입력 검증
+  // 공통 검증
   if (!birthYear)  { showToast('출생연도를 선택해주세요'); return; }
   if (!studentNum) { showToast('학번을 입력해주세요'); return; }
   if (!phone)      { showToast('전화번호를 입력해주세요'); return; }
 
-  // 비밀번호 찾기 모드 전용 검증
+  // 비밀번호 모드 전용 검증
   let newPw = null;
   if (mode === 'pw') {
     newPw = document.getElementById('find-new-pw')?.value;
@@ -439,66 +445,78 @@ async function doFindAccount(mode) {
     if (newPw !== newPw2)           { showToast('새 비밀번호가 일치하지 않습니다'); return; }
   }
 
-  setBtnLoading('btn-find-account', true, mode === 'id' ? '아이디 확인' : '비밀번호 재설정');
+  // 버튼 로딩
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '처리 중...'; }
   try {
-    // ── DB 조회: birth_year + student_number + phone_number 모두 일치
+    // ── DB 조회: birth_year + student_number 일치
     const { data: matched, error: qErr } = await _sb
       .from('users')
       .select('id, username, auth_id, phone_number')
-      .eq('birth_year',      parseInt(birthYear))
-      .eq('student_number',  studentNum)
+      .eq('birth_year',     parseInt(birthYear))
+      .eq('student_number', studentNum)
       .is('deleted_at', null)
       .maybeSingle();
 
-    if (qErr) throw new Error('조회 중 오류가 발생했습니다: ' + qErr.message);
+    if (qErr) throw new Error('조회 오류: ' + qErr.message);
 
-    // 전화번호 대조 (DB 값과 입력값을 숫자만 추출하여 비교)
+    // 전화번호 숫자만 추출해 대조
     const digitsOnly = s => (s || '').replace(/\D/g, '');
     const phoneMatch = matched && digitsOnly(matched.phone_number) === digitsOnly(phone);
 
     if (!matched || !phoneMatch) {
-      setResult('❌ 일치하는 회원 정보를 찾을 수 없습니다.', false);
-      showToast('❌ 입력한 정보와 일치하는 계정이 없습니다');
+      setResult('❌ 일치하는 회원 정보를 찾을 수 없습니다.\n출생연도·학번·전화번호를 다시 확인해주세요.', false);
       return;
     }
 
     // ── 아이디 찾기
     if (mode === 'id') {
-      setResult(`✅ 아이디: ${matched.username}`, true);
-      showToast(`✅ 아이디: ${matched.username}`, 5000);
+      setResult(`✅ 아이디를 찾았어요!\n\n아이디: ${matched.username}`, true);
+      showToast(`✅ 아이디: ${matched.username}`, 6000);
       return;
     }
 
-    // ── 비밀번호 재설정: Supabase Admin API는 프론트에서 직접 호출 불가
-    //    → 내부 이메일로 resetPasswordForEmail 발송 후 안내
-    //    → 동시에 users 테이블에 임시 비밀번호 플래그 기록(선택적 확장 포인트)
-    const internalEmail = `${matched.username}@chuncheon-dating.local`;
-    const { error: resetErr } = await _sb.auth.resetPasswordForEmail(internalEmail, {
-      redirectTo: window.location.origin + window.location.pathname + '?mode=reset-password'
-    });
+    // ── 비밀번호 재설정
+    //    1) Supabase Auth: 해당 내부 이메일로 임시 로그인 시도
+    //    2) 성공하면 updateUser로 비밀번호 변경
+    //    → 프론트에서 비밀번호를 바꾸려면 현재 세션이 필요하므로
+    //      "signInWithPassword(임시)" 대신 관리자 안내로 처리하고
+    //      pw_reset_requests 테이블에 요청 기록을 남긴다
+    const { error: rpcErr } = await _sb.from('pw_reset_requests').insert({
+      user_id:    matched.id,
+      username:   matched.username,
+      new_pw_hash: newPw,           // ⚠️ 실제 운영 시 서버에서 해시 처리 권장
+      status:     'pending',
+      created_at: new Date().toISOString()
+    }).select();
 
-    if (resetErr && !resetErr.message.toLowerCase().includes('not found')) {
-      throw new Error('비밀번호 재설정 요청 실패: ' + resetErr.message);
+    // pw_reset_requests 테이블이 없으면 관리자 직접 처리 안내로 폴백
+    if (rpcErr) {
+      console.warn('[doFindAccount] pw_reset_requests 저장 실패 (테이블 없을 수 있음):', rpcErr.message);
+      setResult(
+        `✅ 본인 확인 완료!\n\n관리자에게 아래 정보를 전달해주세요:\n아이디: ${matched.username}\n문의: ${esc(cfg.ADMIN_EMAIL||'')}`,
+        true
+      );
+      showToast('✅ 본인 확인 완료! 관리자에게 비밀번호 재설정을 요청해주세요.', 6000);
+      return;
     }
 
-    // ── Supabase Auth 이메일 방식 대신 관리자가 직접 처리하는 구조라면
-    //    아래 주석을 해제하고 비밀번호 변경 로직 추가 가능
-    //    (현재는 resetPasswordForEmail + 안내 메시지로 처리)
-    setResult('✅ 비밀번호 재설정 링크가 발송되었습니다.\n(내부 처리 완료)', true);
-    showToast('✅ 본인 확인 완료! 관리자에게 비밀번호 재설정을 요청해주세요.', 5000);
-    setTimeout(() => closeModal('modal-find-account'), 3000);
+    setResult('✅ 비밀번호 재설정 요청이 접수되었습니다.\n관리자 처리 후 로그인 가능합니다.', true);
+    showToast('✅ 비밀번호 재설정 요청이 접수되었습니다!', 5000);
+    setTimeout(() => closeModal('modal-find-account'), 3500);
 
   } catch(err) {
     console.error('[doFindAccount]', err);
     setResult('❌ ' + err.message, false);
     showToast('❌ ' + err.message);
   } finally {
-    setBtnLoading('btn-find-account', false, mode === 'id' ? '아이디 확인' : '비밀번호 재설정');
+    if (btnEl) {
+      btnEl.disabled    = false;
+      btnEl.textContent = mode === 'id' ? '아이디 확인' : '비밀번호 재설정';
+    }
   }
 }
 window.doFindAccount = doFindAccount;
 
-// 하위 호환
 function doForgotPassword() { doFindAccount('pw'); }
 window.doForgotPassword = doForgotPassword;
 async function doAdminLogin() {
@@ -582,15 +600,28 @@ window.enterGuestBrowse = enterGuestBrowse;
 // ============================================================
 async function updateHomeStats() {
   try {
-    const [{ count: tc }, { count: mc }, { count: uc }] = await Promise.all([
+    const [teamRes, matchRes, maleRes, femaleRes] = await Promise.allSettled([
       _sb.from('teams').select('*', { count:'exact', head:true })
         .eq('status','recruiting').eq('is_visible',true),
       _sb.from('matches').select('*', { count:'exact', head:true }),
-      _sb.from('users').select('*', { count:'exact', head:true }).is('deleted_at',null)
+      _sb.from('users').select('*', { count:'exact', head:true })
+        .eq('gender','male').is('deleted_at',null),
+      _sb.from('users').select('*', { count:'exact', head:true })
+        .eq('gender','female').is('deleted_at',null),
     ]);
-    setText('stat-teams',   tc ?? 0);
-    setText('stat-matched', mc ?? 0);
-    setText('stat-members', uc ?? 0);
+
+    const safe = r => (r.status === 'fulfilled' ? (r.value?.count ?? 0) : 0);
+    const tc  = safe(teamRes);
+    const mc  = safe(matchRes);
+    const mc_ = safe(maleRes);
+    const fc  = safe(femaleRes);
+
+    setText('stat-teams',   tc);
+    setText('stat-matched', mc);
+    setText('stat-members', mc_ + fc);
+    // 남녀 개별 카운트 — ID가 존재하면 표시
+    setText('stat-members-male',   mc_);
+    setText('stat-members-female', fc);
   } catch(e) { /* 통계 실패 시 무시 */ }
 }
 window.updateHomeStats = updateHomeStats;
@@ -670,7 +701,13 @@ function onUsernameInput() {
 window.onUsernameInput = onUsernameInput;
 
 async function goToVerification() {
-  // 필수 동의 검증
+  // ── 필수 동의 검증
+  // ── index.html 회원가입 폼에 필요한 전화번호 필드 (없으면 추가):
+  //   <div class="form-group">
+  //     <label class="form-label">전화번호 <span class="required">*</span></label>
+  //     <input class="form-input" type="tel" id="reg-phone"
+  //       placeholder="010-0000-0000" maxlength="15" autocomplete="tel">
+  //   </div>
   const required = document.querySelectorAll('.required-agree');
   for (const cb of required) {
     if (!cb.checked) { showToast('필수 항목에 모두 동의해주세요'); return; }
@@ -1685,55 +1722,98 @@ async function renderAdminDashboard() {
   container.innerHTML = '<div style="padding:24px;text-align:center;"><div class="spinner"></div></div>';
 
   try {
-    // 각 쿼리를 개별 실행해 한 개가 실패해도 나머지는 표시
     const results = await Promise.allSettled([
       _sb.from('users').select('*', { count:'exact', head:true }).is('deleted_at', null),
+      _sb.from('users').select('*', { count:'exact', head:true }).eq('gender','male').is('deleted_at', null),
+      _sb.from('users').select('*', { count:'exact', head:true }).eq('gender','female').is('deleted_at', null),
       _sb.from('student_verifications').select('*', { count:'exact', head:true }).eq('status', 'pending'),
       _sb.from('deposits').select('*', { count:'exact', head:true }).eq('status', 'pending_confirm'),
       _sb.from('teams').select('*', { count:'exact', head:true }).eq('gender', 'male').eq('status', 'recruiting'),
       _sb.from('teams').select('*', { count:'exact', head:true }).eq('gender', 'female').eq('status', 'recruiting'),
       _sb.from('matches').select('*', { count:'exact', head:true }),
       _sb.from('reports').select('*', { count:'exact', head:true }).eq('status', 'pending'),
+      // 확정된 입금 합계
+      _sb.from('deposits').select('amount').eq('status', 'confirmed'),
     ]);
 
-    // 실패한 쿼리는 0으로 대체, 콘솔에 경고
-    const safeCount = (result, idx) => {
-      if (result.status === 'rejected') {
-        console.warn(`[renderAdminDashboard] 쿼리 ${idx} 실패:`, result.reason);
-        return 0;
-      }
-      if (result.value?.error) {
-        console.warn(`[renderAdminDashboard] 쿼리 ${idx} 오류:`, result.value.error.message);
-        return 0;
-      }
-      return result.value?.count ?? 0;
+    const safeCount = (r, idx) => {
+      if (r.status === 'rejected') { console.warn(`[dashboard] 쿼리${idx}:`, r.reason); return 0; }
+      if (r.value?.error) { console.warn(`[dashboard] 쿼리${idx}:`, r.value.error.message); return 0; }
+      return r.value?.count ?? 0;
     };
 
-    const totalUsers    = safeCount(results[0], 0);
-    const pendingVerif  = safeCount(results[1], 1);
-    const pendingDeposit= safeCount(results[2], 2);
-    const maleTeams     = safeCount(results[3], 3);
-    const femaleTeams   = safeCount(results[4], 4);
-    const matched       = safeCount(results[5], 5);
-    const reports       = safeCount(results[6], 6);
+    const totalUsers     = safeCount(results[0], 0);
+    const maleUsers      = safeCount(results[1], 1);
+    const femaleUsers    = safeCount(results[2], 2);
+    const pendingVerif   = safeCount(results[3], 3);
+    const pendingDeposit = safeCount(results[4], 4);
+    const maleTeams      = safeCount(results[5], 5);
+    const femaleTeams    = safeCount(results[6], 6);
+    const matched        = safeCount(results[7], 7);
+    const reports        = safeCount(results[8], 8);
+
+    // 누적 입금액 계산
+    let totalDeposit = 0;
+    if (results[9].status === 'fulfilled' && !results[9].value?.error) {
+      const rows = results[9].value?.data || [];
+      totalDeposit = rows.reduce((s, r) => s + (r.amount || 0), 0);
+    }
 
     container.innerHTML = `
-      <div class="admin-stat-grid">
-        ${adminStat('총 회원 수',    totalUsers, '', "switchAdminTab('users',null)")}
+      <!-- 회원 현황 카드 (남녀 분리) -->
+      <div style="margin:12px 16px 4px;background:white;border-radius:14px;
+        border:1px solid var(--gray-100);overflow:hidden;">
+        <div style="padding:10px 14px;background:var(--gray-50);font-size:12px;
+          font-weight:700;color:var(--gray-600);">👥 회원 현황</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;text-align:center;padding:12px 0;">
+          <div>
+            <div style="font-size:22px;font-weight:800;color:var(--gray-800);">${totalUsers}</div>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:2px;">전체</div>
+          </div>
+          <div style="border-left:1px solid var(--gray-100);border-right:1px solid var(--gray-100);">
+            <div style="font-size:22px;font-weight:800;color:#7B2FF7;">👨 ${maleUsers}</div>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:2px;">남성</div>
+          </div>
+          <div>
+            <div style="font-size:22px;font-weight:800;color:var(--pink);">👩 ${femaleUsers}</div>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:2px;">여성</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 누적 입금액 카드 -->
+      <div style="margin:4px 16px 4px;background:linear-gradient(135deg,#E8F5E9,#F1F8E9);
+        border:1px solid #A5D6A7;border-radius:14px;padding:14px 16px;
+        display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:12px;color:#388E3C;font-weight:600;margin-bottom:4px;">💰 누적 확정 입금액</div>
+          <div style="font-size:24px;font-weight:800;color:#2E7D32;">
+            ${totalDeposit.toLocaleString()}원
+          </div>
+          <div style="font-size:11px;color:#66BB6A;margin-top:2px;">
+            남성 ${cfg.FEE_MALE?.toLocaleString()||3000}원 · 여성 ${cfg.FEE_FEMALE?.toLocaleString()||1000}원 기준
+          </div>
+        </div>
+        <div style="font-size:40px;opacity:0.3;">💳</div>
+      </div>
+
+      <!-- 나머지 통계 그리드 -->
+      <div class="admin-stat-grid" style="margin-top:4px;">
         ${adminStat('인증 대기',     pendingVerif,   pendingVerif>0?'⚠️':'✅', "switchAdminTab('verif',null)",   pendingVerif>0?'var(--warning)':'var(--success)')}
         ${adminStat('입금 확인 대기', pendingDeposit, pendingDeposit>0?'⚠️':'✅', "switchAdminTab('deposit',null)", pendingDeposit>0?'var(--warning)':'var(--success)')}
         ${adminStat('매칭 성사',     matched,    '', '', 'var(--success)')}
-        ${adminStat('활성 남성팀',   maleTeams)}
-        ${adminStat('활성 여성팀',   femaleTeams)}
+        ${adminStat('활성 남성팀',   maleTeams,  '', "switchAdminTab('teams',null)")}
+        ${adminStat('활성 여성팀',   femaleTeams,'', "switchAdminTab('teams',null)")}
         ${adminStat('신고 접수',     reports,    '', "switchAdminTab('reports',null)", reports>0?'var(--error)':'')}
       </div>
+
       <div style="padding:0 16px 16px;">
         <div style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:10px;">⚡ 빠른 처리</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('users',null)">👤 회원 (${totalUsers})</button>
-          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('verif',null)">🎓 인증 (${pendingVerif})</button>
-          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('deposit',null)">💳 입금 (${pendingDeposit})</button>
-          <button class="btn btn-danger btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('reports',null)">🚨 신고 (${reports})</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('users',null)">👤 회원 (${totalUsers})</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('verif',null)">🎓 인증 (${pendingVerif})</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('deposit',null)">💳 입금 (${pendingDeposit})</button>
+          <button class="btn btn-danger btn-sm"    style="flex:1;min-width:90px;" onclick="switchAdminTab('reports',null)">🚨 신고 (${reports})</button>
         </div>
       </div>`;
   } catch(err) {
@@ -2091,6 +2171,7 @@ async function openAdminUserDetail(userId) {
     <div style="background:white;border-radius:var(--radius-sm);border:1.5px solid var(--navy);overflow:hidden;margin-bottom:12px;">
       <div style="padding:10px 14px;background:var(--navy);font-size:12px;font-weight:700;color:rgba(255,255,255,0.8);">🔐 관리자 전용</div>
       ${iRow('🆔 학번', esc(u.student_number||'-'))}
+      ${iRow('📞 전화번호', esc(u.phone_number||'-'))}
       ${iRow('📅 가입일', u.created_at ? new Date(u.created_at).toLocaleString('ko-KR') : '-')}
       ${d.depositor_name ? iRow('💳 입금자명', esc(d.depositor_name)) : ''}
       ${d.amount ? iRow('💰 입금액', d.amount.toLocaleString()+'원') : ''}
@@ -2106,6 +2187,8 @@ async function openAdminUserDetail(userId) {
         ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">⏸️ 비활성화</button>`
         : `<button class="btn btn-secondary btn-sm" onclick="adminActivateUser('${esc(u.id)}')">▶️ 활성화</button>`}
     </div>
+    <button class="btn btn-danger btn-sm" style="width:100%;margin-bottom:8px;background:#B71C1C;"
+      onclick="adminDeleteUser('${esc(u.id)}')">🗑️ 회원 완전 삭제</button>
     <button class="btn btn-outline btn-sm" style="width:100%;"
       onclick="closeModal('modal-admin-user')">닫기</button>`;
 
@@ -2246,7 +2329,46 @@ async function adminUnbanUser(userId) {
 }
 window.adminUnbanUser = adminUnbanUser;
 
-// 팀 숨김
+// 회원 완전 삭제 (soft-delete 된 경우도 포함 영구 삭제)
+async function adminDeleteUser(userId) {
+  try { assertAdmin(); } catch { return; }
+  if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
+  if (!confirm('⚠️ 이 회원을 완전히 삭제하시겠습니까?\n\n' +
+    '• 회원 데이터, 팀, 입금 내역이 모두 삭제됩니다\n' +
+    '• 이 작업은 되돌릴 수 없습니다')) return;
+
+  try {
+    // 관련 데이터 순서대로 삭제 (FK cascade 없을 경우 대비)
+    await _sb.from('student_verifications').delete().eq('user_id', userId);
+    await _sb.from('deposits').delete().eq('user_id', userId);
+    await _sb.from('terms_consents').delete().eq('user_id', userId);
+
+    // 팀 삭제 (리더인 팀)
+    const { data: myTeams } = await _sb.from('teams').select('id').eq('leader_id', userId);
+    if (myTeams?.length) {
+      const teamIds = myTeams.map(t => t.id);
+      await _sb.from('team_members').delete().in('team_id', teamIds);
+      await _sb.from('teams').delete().in('id', teamIds);
+    }
+    // 팀원으로 속한 경우도 삭제
+    await _sb.from('team_members').delete().eq('user_id', userId).catch(() => {});
+
+    // 신고 기록
+    await _sb.from('reports').delete().eq('reporter_id', userId).catch(() => {});
+
+    // users 삭제
+    const { error: delErr } = await _sb.from('users').delete().eq('id', userId);
+    if (delErr) throw new Error('회원 삭제 실패: ' + delErr.message);
+
+    await writeAdminLog('user_delete', 'users', userId);
+    closeModal('modal-admin-user');
+    showToast('🗑️ 회원이 삭제되었습니다');
+    switchAdminTab('users', null);
+  } catch(err) {
+    showToast('❌ ' + err.message);
+  }
+}
+window.adminDeleteUser = adminDeleteUser;
 async function adminHideTeam(teamId) {
   try { assertAdmin(); } catch { return; }
   if (!confirm('이 팀을 숨김 처리하시겠습니까?')) return;
