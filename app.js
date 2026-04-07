@@ -284,8 +284,145 @@ async function doLogin() {
 window.doLogin = doLogin;
 
 // ============================================================
-// 10. ★★★ 관리자 로그인 — role=admin 확인 필수 ★★★
+// 9-1. 비밀번호 찾기 — Supabase resetPasswordForEmail
+//
+// HTML 연결 방법 (예시):
+//   <button onclick="showForgotPasswordModal()">비밀번호를 잊으셨나요?</button>
+//   <!-- 모달 -->
+//   <div id="modal-forgot-pw" class="modal-overlay">
+//     <div class="modal-sheet">
+//       <div style="padding:24px;">
+//         <h3 style="margin-bottom:16px;">🔑 비밀번호 재설정</h3>
+//         <p style="font-size:13px;color:var(--gray-600);margin-bottom:12px;">
+//           가입 시 사용한 아이디를 입력하세요.<br>
+//           관리자가 재설정 링크를 발송해드립니다.
+//         </p>
+//         <input class="form-input" type="text" id="forgot-pw-id"
+//           placeholder="아이디 입력" style="height:48px;margin-bottom:12px;">
+//         <button class="btn btn-primary" id="btn-forgot-pw"
+//           onclick="doForgotPassword()" style="width:100%;">재설정 메일 발송</button>
+//         <button class="btn btn-outline" style="width:100%;margin-top:8px;"
+//           onclick="closeModal('modal-forgot-pw')">취소</button>
+//       </div>
+//     </div>
+//   </div>
 // ============================================================
+
+function showForgotPasswordModal() {
+  const el = document.getElementById('modal-forgot-pw');
+  if (!el) {
+    // 모달 DOM이 없으면 동적 생성 (index.html에 추가하면 제거 가능)
+    const overlay = document.createElement('div');
+    overlay.id        = 'modal-forgot-pw';
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-sheet" style="border-radius:20px 20px 0 0;">
+        <div style="padding:24px;">
+          <div style="font-size:20px;font-weight:800;margin-bottom:8px;">🔑 비밀번호 재설정</div>
+          <p style="font-size:13px;color:var(--gray-600);margin-bottom:16px;line-height:1.6;">
+            가입 시 사용한 <strong>아이디</strong>를 입력하면<br>
+            등록된 이메일로 재설정 링크를 보내드립니다.
+          </p>
+          <div class="form-group">
+            <label class="form-label">아이디</label>
+            <input class="form-input" type="text" id="forgot-pw-id"
+              placeholder="아이디 입력" style="height:48px;"
+              autocomplete="username" autocorrect="off" autocapitalize="none">
+          </div>
+          <div id="forgot-pw-result" style="font-size:12px;margin-top:6px;min-height:16px;"></div>
+          <button class="btn btn-primary" id="btn-forgot-pw"
+            onclick="doForgotPassword()" style="width:100%;margin-top:16px;">
+            재설정 메일 발송
+          </button>
+          <button class="btn btn-outline" style="width:100%;margin-top:8px;"
+            onclick="closeModal('modal-forgot-pw')">취소</button>
+        </div>
+      </div>`;
+    // 오버레이 클릭으로 닫기
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) overlay.classList.remove('show');
+    });
+    document.body.appendChild(overlay);
+  }
+  // 입력값·결과 초기화
+  const idInput  = document.getElementById('forgot-pw-id');
+  const resultEl = document.getElementById('forgot-pw-result');
+  if (idInput)  idInput.value = '';
+  if (resultEl) resultEl.textContent = '';
+  document.getElementById('modal-forgot-pw').classList.add('show');
+}
+window.showForgotPasswordModal = showForgotPasswordModal;
+
+async function doForgotPassword() {
+  const usernameRaw = document.getElementById('forgot-pw-id')?.value.trim();
+  const resultEl    = document.getElementById('forgot-pw-result');
+
+  if (!usernameRaw) { showToast('아이디를 입력해주세요'); return; }
+  if (usernameRaw.length < 4) { showToast('아이디는 4자 이상이어야 합니다'); return; }
+
+  setBtnLoading('btn-forgot-pw', true, '재설정 메일 발송');
+  try {
+    // users 테이블에서 해당 아이디의 존재 여부 확인
+    const { data: userRow } = await _sb
+      .from('users')
+      .select('id, auth_id')
+      .eq('username', usernameRaw)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    // 보안: 존재 여부와 무관하게 성공 메시지 (타이밍 공격 방지)
+    if (!userRow) {
+      if (resultEl) {
+        resultEl.textContent = '✅ 해당 아이디로 등록된 경우 재설정 링크가 발송됩니다.';
+        resultEl.style.color = 'var(--success, #388E3C)';
+      }
+      showToast('📧 등록된 경우 재설정 메일이 발송됩니다');
+      return;
+    }
+
+    // Supabase 내부 이메일로 재설정 메일 발송
+    const email = `${usernameRaw}@chuncheon-dating.local`;
+    const { error: resetErr } = await _sb.auth.resetPasswordForEmail(email, {
+      // 재설정 완료 후 리디렉션할 URL — 실제 배포 도메인으로 교체 필요
+      redirectTo: window.location.origin + window.location.pathname + '?mode=reset-password'
+    });
+
+    if (resetErr) {
+      // "Email not found"는 사용자에게 노출하지 않고 성공처럼 처리
+      if (resetErr.message.toLowerCase().includes('not found') ||
+          resetErr.message.toLowerCase().includes('unable to find')) {
+        if (resultEl) {
+          resultEl.textContent = '✅ 해당 아이디로 등록된 경우 재설정 링크가 발송됩니다.';
+          resultEl.style.color = 'var(--success, #388E3C)';
+        }
+        showToast('📧 등록된 경우 재설정 메일이 발송됩니다');
+        return;
+      }
+      throw new Error('메일 발송 실패: ' + resetErr.message);
+    }
+
+    // 성공
+    if (resultEl) {
+      resultEl.textContent = '✅ 재설정 링크가 발송되었습니다. 메일함을 확인해주세요.';
+      resultEl.style.color = 'var(--success, #388E3C)';
+    }
+    showToast('📧 재설정 메일이 발송되었습니다. 메일함을 확인해주세요', 4000);
+
+    // 3초 후 모달 자동 닫기
+    setTimeout(() => closeModal('modal-forgot-pw'), 3000);
+
+  } catch(err) {
+    console.error('[doForgotPassword]', err);
+    if (resultEl) {
+      resultEl.textContent = '❌ ' + err.message;
+      resultEl.style.color = 'var(--error, #D32F2F)';
+    }
+    showToast('❌ ' + err.message);
+  } finally {
+    setBtnLoading('btn-forgot-pw', false, '재설정 메일 발송');
+  }
+}
+window.doForgotPassword = doForgotPassword;
 async function doAdminLogin() {
   const usernameRaw = document.getElementById('admin-id')?.value.trim();
   const password    = document.getElementById('admin-pw')?.value;
@@ -383,6 +520,77 @@ window.updateHomeStats = updateHomeStats;
 // ============================================================
 // 14. 회원가입 — 실제 DB 저장
 // ============================================================
+
+/**
+ * 아이디 중복 확인 (버튼 클릭 또는 goToVerification 내부에서 호출)
+ *
+ * @param {string}  username     확인할 아이디 (이미 trim된 값)
+ * @param {boolean} silent       true면 토스트 없이 boolean만 반환 (goToVerification 내부용)
+ * @returns {Promise<boolean>}   사용 가능하면 true, 중복이면 false
+ */
+async function _checkUsernameAvailable(username, silent = false) {
+  if (!username || username.length < 4) {
+    if (!silent) showToast('아이디는 4자 이상이어야 합니다');
+    return false;
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+    if (!silent) showToast('아이디는 영문·숫자·밑줄만 사용 가능합니다');
+    return false;
+  }
+  const { data } = await _sb
+    .from('users').select('id').eq('username', username).maybeSingle();
+  if (data) {
+    if (!silent) showToast('❌ 이미 사용 중인 아이디입니다');
+    return false;
+  }
+  if (!silent) showToast('✅ 사용 가능한 아이디입니다');
+  return true;
+}
+
+/**
+ * 아이디 중복 확인 버튼 핸들러 (HTML에서 onclick="checkUsernameBtn()" 으로 호출)
+ * 버튼 ID: btn-check-username  /  입력 ID: reg-username
+ * 결과 표시 영역 ID: username-check-result
+ */
+async function checkUsernameBtn() {
+  const input = document.getElementById('reg-username');
+  const username = input?.value.trim() ?? '';
+  const resultEl = document.getElementById('username-check-result');
+
+  setBtnLoading('btn-check-username', true, '확인');
+  try {
+    const ok = await _checkUsernameAvailable(username, true);
+
+    // 결과 영역이 HTML에 있으면 인라인으로도 표시
+    if (resultEl) {
+      resultEl.textContent = ok ? '✅ 사용 가능한 아이디입니다' : '❌ 이미 사용 중인 아이디입니다';
+      resultEl.style.color = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
+      resultEl.style.fontSize = '12px';
+      resultEl.style.marginTop = '4px';
+    }
+    // 입력 필드 테두리로 즉각 피드백
+    if (input) input.style.borderColor = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
+
+    // 중복이면 토스트로도 알림
+    if (!ok) showToast('❌ 이미 사용 중인 아이디입니다');
+    else      showToast('✅ 사용 가능한 아이디입니다');
+  } catch(err) {
+    showToast('❌ 중복 확인 중 오류: ' + err.message);
+  } finally {
+    setBtnLoading('btn-check-username', false, '확인');
+  }
+}
+window.checkUsernameBtn = checkUsernameBtn;
+
+// 아이디 입력란 변경 시 이전 결과 초기화 (UX 보조)
+function onUsernameInput() {
+  const resultEl = document.getElementById('username-check-result');
+  const input    = document.getElementById('reg-username');
+  if (resultEl) resultEl.textContent = '';
+  if (input)    input.style.borderColor = '';
+}
+window.onUsernameInput = onUsernameInput;
+
 async function goToVerification() {
   // 필수 동의 검증
   const required = document.querySelectorAll('.required-agree');
@@ -405,7 +613,7 @@ async function goToVerification() {
   const bio        = document.getElementById('reg-bio')?.value.trim() || null;
   const marketing  = !!document.getElementById('agree-marketing')?.checked;
 
-  // 입력값 검증 (서버 재검증도 하지만 UX를 위해 클라이언트도 검증)
+  // 입력값 클라이언트 검증
   if (!username || username.length < 4) { showToast('아이디는 4자 이상이어야 합니다'); return; }
   if (!/^[a-zA-Z0-9_]+$/.test(username)){ showToast('아이디는 영문·숫자·밑줄만 사용 가능합니다'); return; }
   if (!password || password.length < 8)  { showToast('비밀번호는 8자 이상이어야 합니다'); return; }
@@ -419,10 +627,9 @@ async function goToVerification() {
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
 
-  // 아이디 중복 확인
-  const { data: existing } = await _sb
-    .from('users').select('id').eq('username', username).single();
-  if (existing) { showToast('이미 사용 중인 아이디입니다'); return; }
+  // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
+  const usernameOk = await _checkUsernameAvailable(username, false);
+  if (!usernameOk) return;
 
   // 임시 저장
   state.regData = {
@@ -447,6 +654,30 @@ window.goToVerification = goToVerification;
 // ============================================================
 // 15. 학생증 업로드 + 회원가입 최종 완료
 // ============================================================
+
+/**
+ * _waitForSession: signUp 직후 세션이 아직 클라이언트에 반영되지 않은 경우를 대비해
+ * 최대 maxMs 동안 폴링으로 세션 확정을 기다린다.
+ * "Confirm Email = OFF" 환경에서는 첫 시도에 바로 반환된다.
+ *
+ * @param {string}  expectedUid  authData.user.id — 세션의 uid가 이것과 일치해야 한다
+ * @param {number}  maxMs        최대 대기 시간 (ms), 기본 3000
+ * @param {number}  intervalMs   폴링 간격 (ms), 기본 300
+ * @returns {{ session, userId } | null}  확정된 세션 정보, 또는 timeout 시 null
+ */
+async function _waitForSession(expectedUid, maxMs = 3000, intervalMs = 300) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const { data: { session } } = await _sb.auth.getSession();
+    if (session?.user?.id === expectedUid) {
+      return { session, userId: session.user.id };
+    }
+    // 아직 세션이 없거나 uid 불일치 → 짧게 대기 후 재시도
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return null; // timeout
+}
+
 async function submitVerification() {
   const d = state.regData;
   if (!d) { showToast('회원가입 정보가 없습니다. 처음부터 다시 시작해주세요.'); return; }
@@ -455,17 +686,35 @@ async function submitVerification() {
   const file = fileInput?.files?.[0];
   if (!file) { showToast('학생증 이미지를 업로드해주세요'); return; }
 
-  // 파일 검증
-  const ALLOWED_TYPES = ['image/jpeg','image/png','image/webp'];
-  if (!ALLOWED_TYPES.includes(file.type)) { showToast('JPG, PNG, WEBP 파일만 업로드 가능합니다'); return; }
-  if (file.size > 10 * 1024 * 1024) { showToast('파일 크기는 10MB 이하여야 합니다'); return; }
+  // ── 파일 검증: 타입·확장자·크기 (이전 버전 유지)
+  const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+  const ALLOWED_EXTS  = ['jpg', 'jpeg', 'png', 'webp'];
+  const fileExt = file.name.split('.').pop().toLowerCase().replace(/[^a-z]/g, '');
+
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    showToast(`❌ 지원하지 않는 파일 형식입니다 (${esc(file.type || '알 수 없음')}). JPG·PNG·WEBP만 가능합니다.`);
+    return;
+  }
+  if (!ALLOWED_EXTS.includes(fileExt)) {
+    showToast(`❌ 파일 확장자가 올바르지 않습니다 (.${esc(fileExt)}). jpg·png·webp 중 하나여야 합니다.`);
+    return;
+  }
+  const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+  if (file.size > 10 * 1024 * 1024) {
+    showToast(`❌ 파일 크기 초과: ${fileSizeMB}MB. 10MB 이하 파일만 업로드 가능합니다.`);
+    return;
+  }
 
   setBtnLoading('btn-verify', true, '업로드 완료');
   try {
-    // 1. Supabase Auth 계정 생성
+
+    // ══════════════════════════════════════════════════════════
+    // STEP 1 — Supabase Auth 계정 생성
+    // ══════════════════════════════════════════════════════════
     const email = `${d.username}@chuncheon-dating.local`;
     const { data: authData, error: authErr } = await _sb.auth.signUp({
-      email, password: d.password,
+      email,
+      password: d.password,
       options: { data: { username: d.username } }
     });
 
@@ -473,59 +722,209 @@ async function submitVerification() {
       if (authErr.message.includes('already registered') || authErr.message.includes('User already registered')) {
         throw new Error('이미 사용 중인 아이디입니다. 다른 아이디를 입력해주세요.');
       }
-      throw new Error('계정 생성 실패: ' + authErr.message);
-    }
-    
-    // ★ 추가된 방어 로직: 세션 생성 여부 확인 (이메일 인증 충돌 방지)
-    if (!authData.session) {
-      throw new Error('이메일 인증 설정 충돌입니다. Supabase 대시보드에서 Confirm Email 설정을 OFF로 변경하세요.');
+      throw new Error(`계정 생성 실패 (${authErr.status ?? 'ERR'}): ${authErr.message}`);
     }
 
-    const authId = authData.user?.id;
-    if (!authId) throw new Error('계정 생성 중 오류가 발생했습니다.');
+    // signUp이 에러 없이 반환됐더라도 user 객체가 없으면 진행 불가
+    const authUser = authData?.user;
+    if (!authUser?.id) {
+      throw new Error('계정 생성 응답이 올바르지 않습니다. 잠시 후 다시 시도해주세요.');
+    }
 
-    // 2. users 테이블 프로필 저장
-    const { data: profile, error: profileErr } = await _sb.from('users').insert({
-      auth_id: authId, username: d.username, nickname: d.nickname,
-      gender: d.gender, role: 'user', university: d.university,
-      department: d.department, student_number: d.student_number,
-      birth_year: d.birth_year, smoking: d.smoking, mbti: d.mbti,
-      bio: d.bio, marketing_agree: d.marketing_agree, profile_active: false
-    }).select().single();
-    if (profileErr) throw new Error('프로필 저장 실패: ' + profileErr.message);
+    // signUp 응답의 user.id — 이후 모든 단계에서 이 값을 신뢰의 기준으로 삼는다
+    const signUpUid = authUser.id;
 
-    // 3. 동의 항목 저장
+    // UUID 형식 사전 검증 (잘못된 값이 DB 경로나 RLS에 흘러들지 않도록)
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_REGEX.test(signUpUid)) {
+      throw new Error(`계정 ID 형식이 올바르지 않습니다 (${esc(signUpUid)}). 관리자에게 문의하세요.`);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // STEP 2 — 세션 확정 대기
+    //
+    // 이유: signUp 직후 클라이언트의 JWT 쿠키/localStorage 반영이
+    //       수 백ms 지연될 수 있다. 이 시점에 INSERT를 보내면
+    //       auth.uid()가 null 로 평가되어 RLS(42501)가 발생한다.
+    //
+    // - "Confirm Email = OFF": _waitForSession이 첫 폴링(300ms)에 성공
+    // - "Confirm Email = ON" : 세션이 영구적으로 발급되지 않으므로 timeout → null 반환
+    // ══════════════════════════════════════════════════════════
+    const sessionResult = await _waitForSession(signUpUid);
+
+    // 세션이 확인된 경우: 세션의 uid가 signUp uid와 반드시 일치해야 한다
+    if (sessionResult) {
+      if (sessionResult.userId !== signUpUid) {
+        // uid 불일치 — 혼선이 생긴 세션이므로 즉시 정리 후 중단
+        await _sb.auth.signOut().catch(() => {});
+        throw new Error(
+          `세션 uid 불일치: 예상(${esc(signUpUid)}) ≠ 실제(${esc(sessionResult.userId)}). ` +
+          '관리자에게 문의하세요.'
+        );
+      }
+      console.info('[submitVerification] 세션 확정 완료 uid:', signUpUid);
+    } else {
+      // 세션 timeout — "Confirm Email = ON" 환경
+      console.warn(
+        '[submitVerification] 세션 대기 timeout. ' +
+        'Supabase Dashboard → Authentication → Providers → Email → "Confirm email" 을 OFF로 설정하면 ' +
+        '가입 즉시 세션이 발급됩니다. 현재는 세션 없이 이후 단계를 진행합니다.'
+      );
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // STEP 3 — users 테이블 프로필 저장
+    //
+    // auth_id 에 signUpUid 를 명시적으로 전달한다.
+    // RLS 정책: INSERT 허용 조건이 auth.uid() = auth_id 라면
+    //   → 세션이 확정된 뒤 이 INSERT가 실행되므로 42501 해소됨
+    //   → 세션이 없는 경우(Confirm Email ON): anon INSERT 정책이
+    //     별도로 존재해야 하며, 없으면 아래 에러 분기에서 안내함
+    // ══════════════════════════════════════════════════════════
+    const insertPayload = {
+      auth_id:         signUpUid,   // ★ RLS auth.uid() 매칭 핵심 필드
+      username:        d.username,
+      nickname:        d.nickname,
+      gender:          d.gender,
+      role:            'user',
+      university:      d.university,
+      department:      d.department,
+      student_number:  d.student_number,
+      birth_year:      d.birth_year,
+      smoking:         d.smoking,
+      mbti:            d.mbti,
+      bio:             d.bio,
+      marketing_agree: d.marketing_agree,
+      profile_active:  false
+    };
+
+    // auth_id 이중 검증: insert 직전 payload 값과 signUpUid가 동일한지 재확인
+    if (insertPayload.auth_id !== signUpUid) {
+      throw new Error('auth_id 내부 검증 실패: insert payload가 signUp uid와 다릅니다.');
+    }
+
+    const { data: profile, error: profileErr } = await _sb
+      .from('users')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (profileErr) {
+      // 프로필 저장 실패 시 Auth 계정도 정리 (세션 있을 때만 가능)
+      if (sessionResult) await _sb.auth.signOut().catch(() => {});
+
+      let profileHint = '';
+      if (profileErr.code === '23505') {
+        profileHint = ' → 이미 가입된 아이디입니다. 다른 아이디로 다시 시도해주세요.';
+      } else if (profileErr.code === '42501') {
+        profileHint = sessionResult
+          ? ' → RLS 정책이 auth.uid() = auth_id 조건을 통과하지 못했습니다. ' +
+            'Supabase SQL Editor에서 users INSERT 정책을 확인하세요.'
+          : ' → 세션 없이 INSERT가 차단되었습니다. ' +
+            'Supabase Dashboard에서 "Confirm email"을 OFF로 설정하거나, ' +
+            'anon role에 대한 users INSERT 정책을 추가해주세요.';
+      }
+      throw new Error(`프로필 저장 실패 [${profileErr.code}]${profileHint}: ${profileErr.message}`);
+    }
+
+    // 저장된 프로필의 auth_id가 signUpUid와 일치하는지 최종 확인
+    if (profile.auth_id !== signUpUid) {
+      console.error('[submitVerification] profile.auth_id 불일치!', profile.auth_id, '≠', signUpUid);
+      throw new Error('저장된 프로필의 auth_id가 계정 uid와 일치하지 않습니다. 관리자에게 문의하세요.');
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // STEP 4 — 동의 항목 저장 (비치명적)
+    // ══════════════════════════════════════════════════════════
     const c = d.consents;
-    await _sb.from('terms_consents').insert({
-      user_id: profile.id, is_adult: true, terms_agree: true,
-      privacy_agree: true, verification_agree: true,
-      deposit_agree: true, falsify_agree: true,
-      marketing_agree: !!c.marketingAgree
+    const { error: consentErr } = await _sb.from('terms_consents').insert({
+      user_id:            profile.id,
+      is_adult:           true,
+      terms_agree:        true,
+      privacy_agree:      true,
+      verification_agree: true,
+      deposit_agree:      true,
+      falsify_agree:      true,
+      marketing_agree:    !!c.marketingAgree
     });
+    if (consentErr) {
+      // 동의 저장 실패는 가입 흐름을 중단시키지 않고 경고만 기록
+      console.warn('[submitVerification] 동의 항목 저장 실패 (무시됨):', consentErr.message);
+    }
 
-    // 4. 학생증 Storage 업로드 (경로: verifications/{auth_id}/filename)
-    const ext      = file.name.split('.').pop().toLowerCase().replace(/[^a-z]/g,'');
-    const safeName = `${Date.now()}.${ext}`;
-    const filePath = `verifications/${authId}/${safeName}`;
+    // ══════════════════════════════════════════════════════════
+    // STEP 5 — 학생증 Storage 업로드
+    //   경로: verifications/{signUpUid}/{timestamp}.{ext}
+    //   signUpUid는 STEP 1에서 UUID_REGEX 검증 완료
+    // ══════════════════════════════════════════════════════════
+    const safeName = `${Date.now()}.${fileExt}`;
+    const filePath = `verifications/${signUpUid}/${safeName}`;
 
     const { error: uploadErr } = await _sb.storage
       .from('student-verifications')
       .upload(filePath, file, { contentType: file.type, upsert: false });
-    if (uploadErr) throw new Error('이미지 업로드 실패: ' + uploadErr.message);
 
-    // 5. student_verifications 테이블 저장
-    await _sb.from('student_verifications').insert({
-      user_id: profile.id, image_path: filePath, status: 'pending'
+    if (uploadErr) {
+      let uploadMsg;
+      if (uploadErr.message.includes('Bucket not found') || uploadErr.message.includes('bucket')) {
+        uploadMsg = '스토리지 버킷(student-verifications)이 존재하지 않습니다. 관리자에게 문의하세요.';
+      } else if (uploadErr.message.includes('row-level security') || uploadErr.statusCode === '403') {
+        uploadMsg = '스토리지 권한 오류 (RLS): Storage 정책에서 verifications/{auth_id}/ 경로의 INSERT 권한을 확인하세요.';
+      } else if (uploadErr.message.includes('Duplicate') || uploadErr.statusCode === '409') {
+        uploadMsg = '동일한 파일이 이미 존재합니다. 잠시 후 다시 시도해주세요.';
+      } else if (uploadErr.message.includes('size') || uploadErr.message.includes('limit')) {
+        uploadMsg = `파일 크기 제한 초과 (${fileSizeMB}MB). 더 작은 파일을 사용해주세요.`;
+      } else {
+        uploadMsg = `이미지 업로드 실패 [${uploadErr.statusCode ?? 'ERR'}]: ${uploadErr.message}`;
+      }
+      throw new Error(uploadMsg);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // STEP 6 — student_verifications 테이블 저장
+    //          관리자 페이지 인증 탭 데이터 노출을 위해 반드시 await
+    // ══════════════════════════════════════════════════════════
+    const { error: verifErr } = await _sb.from('student_verifications').insert({
+      user_id:    profile.id,
+      image_path: filePath,
+      status:     'pending'
     });
+    if (verifErr) {
+      throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
+    }
 
+    // ══════════════════════════════════════════════════════════
+    // STEP 7 — deposits 테이블 초기 레코드 생성
+    //   관리자 입금 탭에서 데이터가 노출되려면 가입 시점에
+    //   레코드가 존재해야 한다. 입금자명은 닉네임으로 임시 설정.
+    // ══════════════════════════════════════════════════════════
+    const feeAmount = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
+    const { error: depositInitErr } = await _sb.from('deposits').insert({
+      user_id:        profile.id,
+      depositor_name: profile.nickname,   // 실제 입금 시 submitDeposit에서 덮어씀
+      amount:         feeAmount,
+      status:         'pending_confirm'
+    });
+    // 이미 레코드가 있거나 충돌(23505)이면 무시 — submitDeposit에서 upsert 처리
+    if (depositInitErr && depositInitErr.code !== '23505') {
+      console.warn('[submitVerification] deposits 초기 레코드 생성 실패 (무시됨):',
+        depositInitErr.code, depositInitErr.message);
+    }
+
+    // ══════════════════════════════════════════════════════════
     // 완료
+    // ══════════════════════════════════════════════════════════
     state.profile = profile;
     state.regData = null;
     setText('home-username', profile.nickname + '님');
-    showToast('🎉 가입 완료! 학생증 검토 후 알림드릴게요');
+    showToast(sessionResult
+      ? '🎉 가입 완료! 학생증 검토 후 알림드릴게요'
+      : '✅ 가입 정보가 저장되었습니다. 관리자 검토 후 서비스가 활성화됩니다.'
+    );
     showScreen('screen-deposit');
 
-  } catch(err) {
+  } catch (err) {
+    console.error('[submitVerification]', err);
     showToast('❌ ' + err.message);
   } finally {
     setBtnLoading('btn-verify', false, '업로드 완료');
@@ -1149,36 +1548,55 @@ async function renderAdminDashboard() {
   container.innerHTML = '<div style="padding:24px;text-align:center;"><div class="spinner"></div></div>';
 
   try {
-    const [
-      { count: totalUsers }, { count: pendingVerif }, { count: pendingDeposit },
-      { count: maleTeams }, { count: femaleTeams }, { count: matched }, { count: reports }
-    ] = await Promise.all([
-      _sb.from('users').select('*',{count:'exact',head:true}).is('deleted_at',null),
-      _sb.from('student_verifications').select('*',{count:'exact',head:true}).eq('status','pending'),
-      _sb.from('deposits').select('*',{count:'exact',head:true}).eq('status','pending_confirm'),
-      _sb.from('teams').select('*',{count:'exact',head:true}).eq('gender','male').eq('status','recruiting'),
-      _sb.from('teams').select('*',{count:'exact',head:true}).eq('gender','female').eq('status','recruiting'),
-      _sb.from('matches').select('*',{count:'exact',head:true}),
-      _sb.from('reports').select('*',{count:'exact',head:true}).eq('status','pending')
+    // 각 쿼리를 개별 실행해 한 개가 실패해도 나머지는 표시
+    const results = await Promise.allSettled([
+      _sb.from('users').select('*', { count:'exact', head:true }).is('deleted_at', null),
+      _sb.from('student_verifications').select('*', { count:'exact', head:true }).eq('status', 'pending'),
+      _sb.from('deposits').select('*', { count:'exact', head:true }).eq('status', 'pending_confirm'),
+      _sb.from('teams').select('*', { count:'exact', head:true }).eq('gender', 'male').eq('status', 'recruiting'),
+      _sb.from('teams').select('*', { count:'exact', head:true }).eq('gender', 'female').eq('status', 'recruiting'),
+      _sb.from('matches').select('*', { count:'exact', head:true }),
+      _sb.from('reports').select('*', { count:'exact', head:true }).eq('status', 'pending'),
     ]);
+
+    // 실패한 쿼리는 0으로 대체, 콘솔에 경고
+    const safeCount = (result, idx) => {
+      if (result.status === 'rejected') {
+        console.warn(`[renderAdminDashboard] 쿼리 ${idx} 실패:`, result.reason);
+        return 0;
+      }
+      if (result.value?.error) {
+        console.warn(`[renderAdminDashboard] 쿼리 ${idx} 오류:`, result.value.error.message);
+        return 0;
+      }
+      return result.value?.count ?? 0;
+    };
+
+    const totalUsers    = safeCount(results[0], 0);
+    const pendingVerif  = safeCount(results[1], 1);
+    const pendingDeposit= safeCount(results[2], 2);
+    const maleTeams     = safeCount(results[3], 3);
+    const femaleTeams   = safeCount(results[4], 4);
+    const matched       = safeCount(results[5], 5);
+    const reports       = safeCount(results[6], 6);
 
     container.innerHTML = `
       <div class="admin-stat-grid">
-        ${adminStat('총 회원 수',    totalUsers||0, '', "switchAdminTab('users',null)")}
-        ${adminStat('인증 대기',     pendingVerif||0, (pendingVerif||0)>0?'⚠️':'✅', "switchAdminTab('verif',null)", (pendingVerif||0)>0?'var(--warning)':'var(--success)')}
-        ${adminStat('입금 확인 대기', pendingDeposit||0, (pendingDeposit||0)>0?'⚠️':'✅', "switchAdminTab('deposit',null)", (pendingDeposit||0)>0?'var(--warning)':'var(--success)')}
-        ${adminStat('매칭 성사',     matched||0, '', '', 'var(--success)')}
-        ${adminStat('활성 남성팀',   maleTeams||0)}
-        ${adminStat('활성 여성팀',   femaleTeams||0)}
-        ${adminStat('신고 접수',     reports||0, '', "switchAdminTab('reports',null)", (reports||0)>0?'var(--error)':'')}
+        ${adminStat('총 회원 수',    totalUsers, '', "switchAdminTab('users',null)")}
+        ${adminStat('인증 대기',     pendingVerif,   pendingVerif>0?'⚠️':'✅', "switchAdminTab('verif',null)",   pendingVerif>0?'var(--warning)':'var(--success)')}
+        ${adminStat('입금 확인 대기', pendingDeposit, pendingDeposit>0?'⚠️':'✅', "switchAdminTab('deposit',null)", pendingDeposit>0?'var(--warning)':'var(--success)')}
+        ${adminStat('매칭 성사',     matched,    '', '', 'var(--success)')}
+        ${adminStat('활성 남성팀',   maleTeams)}
+        ${adminStat('활성 여성팀',   femaleTeams)}
+        ${adminStat('신고 접수',     reports,    '', "switchAdminTab('reports',null)", reports>0?'var(--error)':'')}
       </div>
       <div style="padding:0 16px 16px;">
         <div style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:10px;">⚡ 빠른 처리</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('users',null)">👤 회원 (${totalUsers||0})</button>
-          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('verif',null)">🎓 인증 (${pendingVerif||0})</button>
-          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('deposit',null)">💳 입금 (${pendingDeposit||0})</button>
-          <button class="btn btn-danger btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('reports',null)">🚨 신고 (${reports||0})</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('users',null)">👤 회원 (${totalUsers})</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('verif',null)">🎓 인증 (${pendingVerif})</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('deposit',null)">💳 입금 (${pendingDeposit})</button>
+          <button class="btn btn-danger btn-sm" style="flex:1;min-width:100px;" onclick="switchAdminTab('reports',null)">🚨 신고 (${reports})</button>
         </div>
       </div>`;
   } catch(err) {
@@ -1240,13 +1658,20 @@ async function switchAdminTab(tab, el) {
 
   // ── 인증 목록
   if (tab === 'verif') {
-    const { data: verifs } = await _sb
+    const { data: verifs, error: verifListErr } = await _sb
       .from('student_verifications')
-      .select('*, users(id,nickname,username,university,gender)')
+      .select('*, users!student_verifications_user_id_fkey(id,nickname,username,university,gender)')
       .order('created_at', { ascending: false });
 
-    // 서명된 URL 생성 (5분 유효)
-    const rows = await Promise.all((verifs||[]).map(async v => {
+    if (verifListErr) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div>
+        <div class="empty-title">인증 목록 조회 실패</div>
+        <div class="empty-desc">${esc(verifListErr.message)}</div></div>`;
+      return;
+    }
+
+    // 서명된 URL 생성 (5분 유효) — 병렬 처리
+    const rows = await Promise.all((verifs || []).map(async v => {
       if (v.image_path) {
         const { data: urlData } = await _sb.storage
           .from('student-verifications').createSignedUrl(v.image_path, 300);
@@ -1256,7 +1681,7 @@ async function switchAdminTab(tab, el) {
     }));
 
     container.innerHTML = `
-      <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">🎓 인증 관리</div>
+      <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">🎓 인증 관리 (총 ${rows.length}건)</div>
       <div class="menu-list">
         ${rows.length === 0
           ? '<div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-title">인증 요청 없음</div></div>'
@@ -1266,6 +1691,8 @@ async function switchAdminTab(tab, el) {
                 <div>
                   <span style="font-weight:700;">${esc(v.users?.nickname||'-')}</span>
                   <span style="font-size:12px;color:var(--gray-500);margin-left:6px;">${esc(v.users?.university||'-')}</span>
+                  <span class="chip ${v.users?.gender==='male'?'chip-purple':'chip-pink'}"
+                    style="font-size:10px;margin-left:4px;">${v.users?.gender==='male'?'남':'여'}</span>
                 </div>
                 <span class="chip ${v.status==='pending'?'chip-orange':v.status==='approved'?'chip-green':'chip-red'}">
                   ${v.status==='pending'?'⏳ 대기':v.status==='approved'?'✅ 승인':'❌ 반려'}
@@ -1293,10 +1720,17 @@ async function switchAdminTab(tab, el) {
 
   // ── 입금 목록
   if (tab === 'deposit') {
-    const { data: deposits } = await _sb
+    const { data: deposits, error: depositListErr } = await _sb
       .from('deposits')
-      .select('*, users(id,nickname,username,gender)')
+      .select('*, users!deposits_user_id_fkey(id,nickname,username,gender)')
       .order('created_at', { ascending: false });
+
+    if (depositListErr) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div>
+        <div class="empty-title">입금 목록 조회 실패</div>
+        <div class="empty-desc">${esc(depositListErr.message)}</div></div>`;
+      return;
+    }
 
     container.innerHTML = `
       <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">💳 입금 관리</div>
