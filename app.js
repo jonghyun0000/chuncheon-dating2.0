@@ -821,9 +821,9 @@ async function submitVerification() {
   const d = state.regData;
   if (!d) { showToast('회원가입 정보가 없습니다. 처음부터 다시 시작해주세요.'); return; }
 
-  // ── 파일 검증 (file-input 또는 state.uploadedFile 중 하나라도 있으면 OK)
+  // ── 파일 검증
   const fileInput = document.getElementById('file-input');
-  const file      = fileInput?.files?.[0] || state.uploadedFile;
+  const file      = fileInput?.files?.[0];
   if (!file) { showToast('학생증 이미지를 업로드해주세요'); return; }
 
   const ALLOWED_TYPES = ['image/jpeg','image/png','image/webp'];
@@ -1090,11 +1090,31 @@ async function submitDeposit() {
 
   setBtnLoading('btn-deposit', true, '입금 완료했습니다 ✓');
   try {
-    const { error } = await _sb.from('deposits').upsert(
-      { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' },
-      { onConflict: 'user_id' }
-    );
-    if (error) throw new Error('입금 신청 저장 실패: ' + error.message);
+    // ★ upsert 대신 기존 레코드 확인 후 INSERT or UPDATE 분기
+    //   → RLS가 UPDATE를 막는 경우 upsert가 실패하므로 안전하게 분기 처리
+    const { data: existing } = await _sb
+      .from('deposits')
+      .select('id, status')
+      .eq('user_id', profile.id)
+      .maybeSingle();
+
+    let dbError;
+    if (existing) {
+      // 이미 레코드가 있으면 UPDATE
+      const { error } = await _sb
+        .from('deposits')
+        .update({ depositor_name: name, amount, status: 'pending_confirm' })
+        .eq('user_id', profile.id);
+      dbError = error;
+    } else {
+      // 없으면 INSERT
+      const { error } = await _sb
+        .from('deposits')
+        .insert({ user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' });
+      dbError = error;
+    }
+
+    if (dbError) throw new Error('입금 신청 저장 실패: ' + dbError.message);
 
     showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
     showScreen('screen-pending');
@@ -1400,15 +1420,30 @@ async function registerTeam() {
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
-    const { data: team, error: teamErr } = await _sb.from('teams').insert({
-      leader_id:    profile.id,
-      gender:       profile.gender,
+    // ★ contact_phone 컬럼이 DB에 없을 수 있으므로 안전하게 처리
+    //   먼저 contact_phone 포함해서 시도하고, 컬럼 없으면 제외 후 재시도
+    const teamPayload = {
+      leader_id:   profile.id,
+      gender:      profile.gender,
       title,
-      university:   profile.university,
-      status:       'recruiting',
-      contact_phone: phoneNum,
-      is_verified:  isVerified   // 인증완료 여부 — 상단 노출 기준
-    }).select().single();
+      university:  profile.university,
+      status:      'recruiting',
+      is_verified: isVerified
+    };
+
+    // contact_phone 컬럼 추가 시도 (schema.sql에 컬럼이 있는 경우만 동작)
+    let team, teamErr;
+    ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+      ...teamPayload,
+      contact_phone: phoneNum
+    }).select().single());
+
+    // contact_phone 컬럼 없음 오류 → 컬럼 제외 후 재시도
+    if (teamErr && (teamErr.message?.includes('contact_phone') || teamErr.code === 'PGRST204' || teamErr.message?.includes('schema cache'))) {
+      console.warn('[registerTeam] contact_phone 컬럼 없음, 제외 후 재시도');
+      ({ data: team, error: teamErr } = await _sb.from('teams').insert(teamPayload).select().single());
+    }
+
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
 
     const memberRows = members.map(m => ({ ...m, team_id: team.id }));
@@ -1674,41 +1709,6 @@ async function updateMyPageStatus() {
     if (verifEl)   verifEl.textContent   = V_LABEL[verif?.status]   || '미제출';
     if (depositEl) depositEl.textContent = D_LABEL[deposit?.status] || '미입금';
     if (teamEl)    teamEl.textContent    = profile.profile_active ? '활성' : '대기';
-
-    // ★ 마이페이지 인증완료 뱃지 자동 표시
-    const verifBadge = document.querySelector('.profile-verified');
-    if (verifBadge) {
-      if (verif?.status === 'approved') {
-        verifBadge.innerHTML = '<span>✅</span> 재학생 인증 완료';
-        verifBadge.style.display = 'inline-flex';
-      } else if (verif?.status === 'pending') {
-        verifBadge.innerHTML = '<span>⏳</span> 인증 검토 중';
-        verifBadge.style.display = 'inline-flex';
-      } else if (verif?.status === 'rejected') {
-        verifBadge.innerHTML = '<span>❌</span> 인증 반려됨';
-        verifBadge.style.display = 'inline-flex';
-      } else {
-        verifBadge.innerHTML = '<span>⚠️</span> 인증 미완료';
-        verifBadge.style.display = 'inline-flex';
-      }
-    }
-
-    // ★ 마이페이지 인증 상태 칩도 자동 반영
-    const verifChipEl   = document.querySelector('.mypage-verif-chip');
-    const depositChipEl = document.querySelector('.mypage-deposit-chip');
-    const teamChipEl    = document.querySelector('.mypage-team-chip');
-    if (verifChipEl) {
-      verifChipEl.textContent = V_LABEL[verif?.status] || '미제출';
-      verifChipEl.className = 'chip ' + (verif?.status === 'approved' ? 'chip-green' : verif?.status === 'pending' ? 'chip-orange' : 'chip-red');
-    }
-    if (depositChipEl) {
-      depositChipEl.textContent = D_LABEL[deposit?.status] || '미입금';
-      depositChipEl.className = 'chip ' + (deposit?.status === 'confirmed' ? 'chip-green' : deposit?.status === 'pending_confirm' ? 'chip-orange' : 'chip-red');
-    }
-    if (teamChipEl) {
-      teamChipEl.textContent = profile.profile_active ? '활성' : '대기';
-      teamChipEl.className = 'chip ' + (profile.profile_active ? 'chip-green' : 'chip-orange');
-    }
   } catch(e) { /* 무시 */ }
 }
 window.updateMyPageStatus = updateMyPageStatus;
@@ -2274,11 +2274,6 @@ async function adminApproveVerif(verifId, userId) {
       reviewed_at: new Date().toISOString(),
       auto_delete_at: new Date(Date.now() + 30*24*60*60*1000).toISOString()
     }).eq('id', verifId);
-
-    // ★ 인증 승인 시 profile_active 자동 활성화
-    if (userId) {
-      await _sb.from('users').update({ profile_active: true }).eq('id', userId);
-    }
 
     await writeAdminLog('verification_approve','student_verifications', verifId, { user_id: userId });
     showToast('✅ 인증이 승인되었습니다');
