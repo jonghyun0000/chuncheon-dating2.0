@@ -758,8 +758,8 @@ async function goToVerification() {
   if (!university || university === '')  { showToast('대학교를 선택해주세요'); return; }
   if (!department || department.length < 2){ showToast('학과를 입력해주세요'); return; }
   if (!studentNum || studentNum.length < 6){ showToast('학번을 입력해주세요'); return; }
-  if (!birthYear || new Date().getFullYear() - birthYear < 19) {
-    showToast('만 19세 이상만 가입할 수 있습니다'); return;
+  if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 18) {
+    showToast('만 18세 이상만 가입할 수 있습니다'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
   if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
@@ -821,9 +821,9 @@ async function submitVerification() {
   const d = state.regData;
   if (!d) { showToast('회원가입 정보가 없습니다. 처음부터 다시 시작해주세요.'); return; }
 
-  // ── 파일 검증
+  // ── 파일 검증 (file-input 또는 state.uploadedFile 중 하나라도 있으면 OK)
   const fileInput = document.getElementById('file-input');
-  const file      = fileInput?.files?.[0];
+  const file      = fileInput?.files?.[0] || state.uploadedFile;
   if (!file) { showToast('학생증 이미지를 업로드해주세요'); return; }
 
   const ALLOWED_TYPES = ['image/jpeg','image/png','image/webp'];
@@ -972,6 +972,13 @@ async function submitVerification() {
           }
         } else if (profileErr.code === '42501') {
           throw new Error('RLS 권한 오류: Supabase → SQL Editor에서 users 테이블 INSERT 정책을 확인하세요. (auth.uid() = auth_id 조건 필요)');
+        } else if (profileErr.code === '23514') {
+          // 체크 제약 위반 — birth_year 범위 초과가 가장 흔한 원인
+          throw new Error(
+            '입력 값이 DB 제약 조건을 위반했습니다.\n' +
+            '생년월일이 허용 범위를 벗어났을 수 있습니다.\n' +
+            '(Supabase SQL Editor: ALTER TABLE users DROP CONSTRAINT users_birth_year_check; 실행 후 재시도)'
+          );
         } else {
           throw new Error(`프로필 저장 실패 [${profileErr.code}]: ${profileErr.message}`);
         }
@@ -1667,6 +1674,41 @@ async function updateMyPageStatus() {
     if (verifEl)   verifEl.textContent   = V_LABEL[verif?.status]   || '미제출';
     if (depositEl) depositEl.textContent = D_LABEL[deposit?.status] || '미입금';
     if (teamEl)    teamEl.textContent    = profile.profile_active ? '활성' : '대기';
+
+    // ★ 마이페이지 인증완료 뱃지 자동 표시
+    const verifBadge = document.querySelector('.profile-verified');
+    if (verifBadge) {
+      if (verif?.status === 'approved') {
+        verifBadge.innerHTML = '<span>✅</span> 재학생 인증 완료';
+        verifBadge.style.display = 'inline-flex';
+      } else if (verif?.status === 'pending') {
+        verifBadge.innerHTML = '<span>⏳</span> 인증 검토 중';
+        verifBadge.style.display = 'inline-flex';
+      } else if (verif?.status === 'rejected') {
+        verifBadge.innerHTML = '<span>❌</span> 인증 반려됨';
+        verifBadge.style.display = 'inline-flex';
+      } else {
+        verifBadge.innerHTML = '<span>⚠️</span> 인증 미완료';
+        verifBadge.style.display = 'inline-flex';
+      }
+    }
+
+    // ★ 마이페이지 인증 상태 칩도 자동 반영
+    const verifChipEl   = document.querySelector('.mypage-verif-chip');
+    const depositChipEl = document.querySelector('.mypage-deposit-chip');
+    const teamChipEl    = document.querySelector('.mypage-team-chip');
+    if (verifChipEl) {
+      verifChipEl.textContent = V_LABEL[verif?.status] || '미제출';
+      verifChipEl.className = 'chip ' + (verif?.status === 'approved' ? 'chip-green' : verif?.status === 'pending' ? 'chip-orange' : 'chip-red');
+    }
+    if (depositChipEl) {
+      depositChipEl.textContent = D_LABEL[deposit?.status] || '미입금';
+      depositChipEl.className = 'chip ' + (deposit?.status === 'confirmed' ? 'chip-green' : deposit?.status === 'pending_confirm' ? 'chip-orange' : 'chip-red');
+    }
+    if (teamChipEl) {
+      teamChipEl.textContent = profile.profile_active ? '활성' : '대기';
+      teamChipEl.className = 'chip ' + (profile.profile_active ? 'chip-green' : 'chip-orange');
+    }
   } catch(e) { /* 무시 */ }
 }
 window.updateMyPageStatus = updateMyPageStatus;
@@ -2233,6 +2275,11 @@ async function adminApproveVerif(verifId, userId) {
       auto_delete_at: new Date(Date.now() + 30*24*60*60*1000).toISOString()
     }).eq('id', verifId);
 
+    // ★ 인증 승인 시 profile_active 자동 활성화
+    if (userId) {
+      await _sb.from('users').update({ profile_active: true }).eq('id', userId);
+    }
+
     await writeAdminLog('verification_approve','student_verifications', verifId, { user_id: userId });
     showToast('✅ 인증이 승인되었습니다');
     switchAdminTab('verif', null);
@@ -2572,10 +2619,11 @@ window.toggleAll = toggleAll;
   if (!sel) return;
   const cy = new Date().getFullYear();
   const fragment = document.createDocumentFragment();
-  for (let y = cy-19; y >= 1980; y--) {
+  // 만 18세(cy-18) ~ 1980년생까지 표시
+  for (let y = cy - 18; y >= 1980; y--) {
     const opt = document.createElement('option');
     opt.value = y;
-    opt.textContent = y+'년';
+    opt.textContent = y + '년';
     fragment.appendChild(opt);
   }
   sel.appendChild(fragment);
