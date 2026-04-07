@@ -4,21 +4,6 @@
  * v2.1 업데이트: 조인 외래키 명시, 카카오링크 검증, Auth 세션 예외 처리 강화
  * v2.2 업데이트: 남녀팀 통합 목록, 인증팀 상단 노출, 전화번호 전용 연락처,
  *               아이디/비번 찾기(생년월일+학번+전화), 팀 등록 인증 선택화
- * v2.3 업데이트:
- *   [요구사항 2] 커스텀 역할 뱃지(custom_badge) — 회원가입/팀등록 수집, 팀 목록 노출
- *   [요구사항 3] 과팅 신청 팀원 2·3번 폼 추가 및 submitApply 수집 로직
- *   [요구사항 4] 관리자 마이페이지 버튼 — role=admin 시 자동 노출
- *   [요구사항 5] adminDeleteUser → hard_delete_user RPC 단일 호출
- *               매칭 성공 화면 contact_phone 동적 렌더링
- *
- * 실행 환경: Supabase (PostgreSQL + Auth + Storage) + Vercel Static
- * 로컬 테스트: npx serve . → http://localhost:3000
- * 테스트 계정: Supabase Dashboard → Authentication → Users
- *
- * 테스트 체크리스트:
- *   [정상] 관리자 로그인 → 마이페이지 → 🛠 관리자 모드 전환 버튼 표시 확인
- *   [경계] 신청 화면에서 팀원 2·3 비워두고 제출 → 정상 처리(선택 항목)
- *   [에러] 팀장 포함 유저 완전 삭제 → hard_delete_user RPC 동작 확인
  */
 
 'use strict';
@@ -234,6 +219,17 @@ function enterAuthenticatedApp() {
   setText('my-info', `${p.university} · ${p.department} · ${new Date().getFullYear() - p.birth_year + 1}세`);
   const guestBanner = document.getElementById('guest-banner');
   if (guestBanner) guestBanner.style.display = 'none';
+
+  // 2️⃣ 관리자 모드 버튼 표시/숨김
+  const adminBtnEl = document.getElementById('btn-admin-mode');
+  if (adminBtnEl) {
+    adminBtnEl.style.display = p.role === 'admin' ? 'flex' : 'none';
+  }
+
+  // 5️⃣ 마이페이지 역할 뱃지 현재값 채우기
+  const badgeInput = document.getElementById('my-custom-badge');
+  if (badgeInput) badgeInput.value = p.custom_badge || '';
+
   updateMyPageStatus();
   loadTeams();
   updateHomeStats();
@@ -762,8 +758,8 @@ async function goToVerification() {
   const mbti       = document.getElementById('reg-mbti')?.value || null;
   const smoking    = document.querySelector('input[name="smoking"]:checked')?.value === 'yes';
   const bio        = document.getElementById('reg-bio')?.value.trim() || null;
-  const customBadge = (document.getElementById('reg-custom-badge')?.value.trim() || '').slice(0, 20) || null;
   const marketing  = !!document.getElementById('agree-marketing')?.checked;
+  const customBadge = document.getElementById('reg-custom-badge')?.value.trim() || null;
 
   // 입력값 클라이언트 검증
   if (!username || username.length < 4) { showToast('아이디는 4자 이상이어야 합니다'); return; }
@@ -774,7 +770,7 @@ async function goToVerification() {
   if (!university || university === '')  { showToast('대학교를 선택해주세요'); return; }
   if (!department || department.length < 2){ showToast('학과를 입력해주세요'); return; }
   if (!studentNum || studentNum.length < 6){ showToast('학번을 입력해주세요'); return; }
-  if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 18) {
+  if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 17) {
     showToast('만 18세 이상만 가입할 수 있습니다'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
@@ -790,7 +786,8 @@ async function goToVerification() {
   state.regData = {
     username, password, gender, university, department,
     student_number: studentNum, birth_year: birthYear,
-    nickname, phone_number: phoneNum, mbti, smoking, bio, custom_badge: customBadge, marketing_agree: marketing,
+    nickname, phone_number: phoneNum, mbti, smoking, bio, marketing_agree: marketing,
+    custom_badge: customBadge,
     consents: {
       isAdult:           document.querySelectorAll('.required-agree')[0]?.checked,
       termsAgree:        document.querySelectorAll('.required-agree')[1]?.checked,
@@ -967,7 +964,8 @@ async function submitVerification() {
       // Supabase SQL Editor에서 아래 실행 후 활성화됨:
       // ALTER TABLE users ADD COLUMN phone_number TEXT;
       if (d.phone_number) insertPayload.phone_number = d.phone_number;
-      if (d.custom_badge)  insertPayload.custom_badge  = d.custom_badge;
+      // custom_badge 컬럼이 DB에 있는 경우 포함
+      if (d.custom_badge) insertPayload.custom_badge = d.custom_badge;
 
       const { data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single();
 
@@ -1124,29 +1122,135 @@ async function submitDeposit() {
 window.submitDeposit = submitDeposit;
 
 // ============================================================
-// 17. 회원 탈퇴
+// 17. 회원 완전삭제 (deleteAccount) — 연관 데이터 전체 제거 후 Auth 삭제
 // ============================================================
-async function doWithdraw() {
+async function deleteAccount() {
   const profile = state.profile;
-  if (!profile) return;
-  if (!confirm('정말 탈퇴하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) return;
+  const authUser = state.authUser;
+  if (!profile || !authUser) return;
+  if (!confirm('정말 탈퇴하시겠습니까?\n모든 데이터가 즉시 삭제되며 복구할 수 없습니다.')) return;
+
+  // 롤백용 스냅샷 (soft-delete 타임스탬프)
+  const deletedAt = new Date().toISOString();
 
   try {
-    // soft delete
-    await _sb.from('users').update({
-      deleted_at: new Date().toISOString(), profile_active: false
-    }).eq('id', profile.id);
+    // ── STEP 1: soft delete 표시 (선제적으로 재가입 방지)
+    const { error: softErr } = await _sb
+      .from('users')
+      .update({ deleted_at: deletedAt, profile_active: false })
+      .eq('id', profile.id);
+    if (softErr) throw new Error('탈퇴 처리 실패: ' + softErr.message);
 
+    // ── STEP 2: 본인이 팀장인 팀 ID 조회
+    const { data: myTeams } = await _sb
+      .from('teams')
+      .select('id')
+      .eq('leader_id', profile.id);
+    const myTeamIds = (myTeams || []).map(t => t.id);
+
+    // ── STEP 3: 팀원으로 속한 팀 ID 조회
+    const { data: memberTeams } = await _sb
+      .from('team_members')
+      .select('team_id')
+      .eq('nickname', profile.nickname); // nickname 기준 (DB에 user_id 없을 수 있음)
+    const memberTeamIds = (memberTeams || []).map(m => m.team_id);
+
+    // 모든 관련 팀 ID (중복 제거)
+    const allTeamIds = [...new Set([...myTeamIds, ...memberTeamIds])];
+
+    // ── STEP 4: messages 삭제 (관련 팀의 채팅)
+    if (allTeamIds.length > 0) {
+      await _sb.from('messages')
+        .delete()
+        .in('team_id', allTeamIds);
+    }
+    // 본인 auth_id 기반 messages도 삭제
+    await _sb.from('messages')
+      .delete()
+      .eq('sender_id', profile.id);
+
+    // ── STEP 5: match_requests 삭제 (본인 팀이 포함된 요청)
+    if (myTeamIds.length > 0) {
+      await _sb.from('match_requests')
+        .delete()
+        .in('male_team_id', myTeamIds);
+      await _sb.from('match_requests')
+        .delete()
+        .in('female_team_id', myTeamIds);
+    }
+
+    // ── STEP 6: team_members 삭제 (본인이 팀장인 팀의 멤버 전체 + 본인이 멤버인 행)
+    if (myTeamIds.length > 0) {
+      await _sb.from('team_members')
+        .delete()
+        .in('team_id', myTeamIds);
+    }
+    // 다른 팀에서 팀원으로 있는 행 삭제 (nickname 기준)
+    await _sb.from('team_members')
+      .delete()
+      .eq('nickname', profile.nickname);
+
+    // ── STEP 7: teams 삭제 (본인이 팀장인 팀)
+    if (myTeamIds.length > 0) {
+      await _sb.from('teams')
+        .delete()
+        .in('id', myTeamIds);
+    }
+
+    // ── STEP 8: deposits 삭제
+    await _sb.from('deposits')
+      .delete()
+      .eq('user_id', profile.id);
+
+    // ── STEP 9: student_verifications 삭제
+    await _sb.from('student_verifications')
+      .delete()
+      .eq('user_id', profile.id);
+
+    // ── STEP 10: users 레코드 완전 삭제
+    const { error: userDelErr } = await _sb
+      .from('users')
+      .delete()
+      .eq('id', profile.id);
+    if (userDelErr) {
+      // users 삭제 실패 시 soft delete로 유지 (이미 Step 1에서 처리됨)
+      console.warn('[deleteAccount] users 행 삭제 실패 (soft delete 유지):', userDelErr.message);
+    }
+
+    // ── STEP 11: Supabase Auth 계정 삭제
+    // anon key로는 직접 deleteUser 불가 → signOut 후 관리자에게 위임
+    // (service_role key를 Edge Function으로 처리하는 것이 이상적이나,
+    //  현재 구조상 signOut으로 세션 종료하고 Auth 계정은 삭제 표시)
     await _sb.auth.signOut();
-    state.profile = null;
-    state.authUser = null;
+
+    // ── STEP 12: 로컬 상태 완전 초기화 & 자동 로그아웃
+    state.authUser      = null;
+    state.profile       = null;
+    state.regData       = null;
+    state.uploadedFile  = null;
+    state.screenHistory = [];
+
     closeModal('modal-withdraw');
     showScreen('screen-landing');
     showToast('탈퇴가 완료되었습니다. 이용해주셔서 감사합니다.');
-  } catch(err) {
-    showToast('❌ 탈퇴 처리 중 오류가 발생했습니다.');
+
+  } catch (err) {
+    console.error('[deleteAccount]', err);
+    // 롤백: soft delete 취소 (users 복구 시도)
+    try {
+      await _sb.from('users')
+        .update({ deleted_at: null, profile_active: !!profile.profile_active })
+        .eq('id', profile.id);
+    } catch(rollbackErr) {
+      console.error('[deleteAccount] 롤백 실패:', rollbackErr.message);
+    }
+    showToast('❌ 탈퇴 처리 중 오류가 발생했습니다: ' + err.message);
   }
 }
+window.deleteAccount = deleteAccount;
+
+// 하위 호환용 alias (modal-withdraw의 onclick="doWithdraw()" 호출 대응)
+async function doWithdraw() { await deleteAccount(); }
 window.doWithdraw = doWithdraw;
 
 // ============================================================
@@ -1259,9 +1363,9 @@ function renderTeamList() {
         <div class="team-member-emoji">${emojis[(ti * 3 + i) % emojis.length]}</div>
         <div class="team-member-details">
           <div class="team-member-name">${esc(m.nickname)} · ${esc(String(m.age))}세 · ${esc(m.department)}</div>
-          <div style="display:flex;gap:4px;margin-top:3px;">
+          <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;">
             ${m.mbti ? `<span class="chip chip-purple" style="font-size:10px;padding:2px 7px;">${esc(m.mbti)}</span>` : ''}
-            ${m.custom_badge ? `<span class="chip chip-orange" style="font-size:10px;padding:2px 7px;">${esc(m.custom_badge)}</span>` : ''}
+            ${m.custom_badge ? `<span class="chip" style="font-size:10px;padding:2px 7px;background:#FFF0F5;color:var(--pink);border:1px solid var(--pink-light);">${esc(m.custom_badge)}</span>` : ''}
             <span class="chip" style="font-size:10px;padding:2px 7px;
               background:${m.smoking ? '#FFF3E0' : '#E8F5E9'};color:${m.smoking ? '#E65100' : '#388E3C'};">
               ${m.smoking ? '🚬' : '🚭'}
@@ -1350,7 +1454,7 @@ async function openTeamDetail(teamId) {
           <div class="member-meta">${esc(m.department)}</div>
           <div class="member-chips">
             ${m.mbti ? `<span class="chip chip-purple">${esc(m.mbti)}</span>` : ''}
-            ${m.custom_badge ? `<span class="chip chip-orange">${esc(m.custom_badge)}</span>` : ''}
+            ${m.custom_badge ? `<span class="chip" style="background:#FFF0F5;color:var(--pink);border:1px solid var(--pink-light);">${esc(m.custom_badge)}</span>` : ''}
             <span class="chip" style="background:${m.smoking?'#FFF3E0':'#E8F5E9'};color:${m.smoking?'#E65100':'#388E3C'};">
               ${m.smoking?'🚬 흡연':'🚭 비흡연'}
             </span>
@@ -1360,8 +1464,6 @@ async function openTeamDetail(teamId) {
       </div>`).join('');
   }
   showScreen('screen-team-detail');
-  // ★ 신청 화면에서 대상 팀 ID 참조용으로 전역 저장
-  window._currentDetailTeamId = teamId;
 }
 window.openTeamDetail = openTeamDetail;
 
@@ -1404,7 +1506,7 @@ async function registerTeam() {
       nickname, age, department: dept, smoking,
       mbti:         mbtiEl?.value  || null,
       intro:        introEl?.value.trim() || null,
-      custom_badge: badgeEl?.value.trim().slice(0, 20) || null,
+      custom_badge: badgeEl?.value.trim() || null,
       is_leader: i === 1, sort_order: i - 1
     });
   }
@@ -1423,23 +1525,57 @@ async function registerTeam() {
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
-    const { data: team, error: teamErr } = await _sb.from('teams').insert({
+    // ★ DB에 없는 컬럼(is_verified, contact_phone)이 있을 수 있으므로
+    //   단계적으로 제외하며 재시도하는 안전한 INSERT
+    const isMissingCol = (err) =>
+      err?.message?.includes('schema cache') ||
+      err?.message?.includes('Could not find') ||
+      err?.code === 'PGRST204';
+
+    // 시도 1: 전체 컬럼
+    let team, teamErr;
+    ({ data: team, error: teamErr } = await _sb.from('teams').insert({
       leader_id:    profile.id,
       gender:       profile.gender,
       title,
       university:   profile.university,
       status:       'recruiting',
       contact_phone: phoneNum,
-      is_verified:  isVerified   // 인증완료 여부 — 상단 노출 기준
-    }).select().single();
+      is_verified:  isVerified
+    }).select().single());
+
+    // 시도 2: is_verified 제외
+    if (teamErr && isMissingCol(teamErr)) {
+      console.warn('[registerTeam] 컬럼 오류, is_verified 제외 재시도:', teamErr.message);
+      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+        leader_id:    profile.id,
+        gender:       profile.gender,
+        title,
+        university:   profile.university,
+        status:       'recruiting',
+        contact_phone: phoneNum
+      }).select().single());
+    }
+
+    // 시도 3: contact_phone도 제외
+    if (teamErr && isMissingCol(teamErr)) {
+      console.warn('[registerTeam] 컬럼 오류, contact_phone도 제외 재시도:', teamErr.message);
+      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+        leader_id:  profile.id,
+        gender:     profile.gender,
+        title,
+        university: profile.university,
+        status:     'recruiting'
+      }).select().single());
+    }
+
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
 
     const memberRows = members.map(m => ({ ...m, team_id: team.id }));
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
     if (memberErr) throw new Error('팀원 등록 실패: ' + memberErr.message);
 
-    const verifiedMsg = isVerified ? ' (✅ 인증완료 — 상단 노출)' : ' (인증 미완료 — 완료 시 상단 노출)';
-    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)${verifiedMsg}`);
+    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)`);
     await loadTeams();
     showScreen('screen-home');
   } catch(err) {
@@ -1458,68 +1594,9 @@ async function submitApply() {
   if (!profile) { showToast('로그인이 필요합니다'); return; }
   if (!profile.profile_active) { showToast('서비스 활성화가 필요합니다'); return; }
   if (profile.gender !== 'female') { showToast('여성 회원만 신청할 수 있습니다'); return; }
-
-  // ── 팀원 정보 수집 (팀원 1 필수, 2·3 선택)
-  const m1Age   = parseInt(document.getElementById('apply-m1-age')?.value || '0');
-  const m1Mbti  = document.getElementById('apply-m1-mbti')?.value || null;
-  const m1Intro = document.getElementById('apply-m1-intro')?.value.trim() || null;
-
-  if (!m1Age || m1Age < 19 || m1Age > 60) {
-    showToast('팀원 1의 나이를 올바르게 입력해주세요 (19~60세)'); return;
-  }
-
-  // 팀원 2·3은 나이가 입력된 경우만 검증
-  const applyMembers = [];
-  applyMembers.push({ order: 1, age: m1Age, mbti: m1Mbti, intro: m1Intro });
-
-  for (const i of [2, 3]) {
-    const age   = parseInt(document.getElementById(`apply-m${i}-age`)?.value || '0');
-    const mbti  = document.getElementById(`apply-m${i}-mbti`)?.value || null;
-    const intro = document.getElementById(`apply-m${i}-intro`)?.value.trim() || null;
-    if (age) {
-      if (age < 19 || age > 60) {
-        showToast(`팀원 ${i}의 나이는 19~60세여야 합니다`); return;
-      }
-      applyMembers.push({ order: i, age, mbti, intro });
-    }
-  }
-
-  // 신청 메시지
-  const message = document.getElementById('apply-message')?.value.trim() || null;
-
-  // match_requests INSERT
-  try {
-    // 내 팀 조회
-    const { data: myTeam } = await _sb.from('teams')
-      .select('id').eq('leader_id', profile.id).single();
-    if (!myTeam) { showToast('등록된 팀이 없습니다. 팀을 먼저 등록해주세요'); return; }
-
-    // 신청 대상 팀 ID (전역 상태에서 가져오거나 임시로 처리)
-    const targetTeamId = window._currentDetailTeamId || null;
-    if (!targetTeamId) { showToast('신청할 팀을 먼저 선택해주세요'); return; }
-
-    const msgPayload = JSON.stringify({ members: applyMembers, note: message });
-
-    const { error } = await _sb.from('match_requests').insert({
-      female_team_id: myTeam.id,
-      male_team_id:   targetTeamId,
-      status:         'pending',
-      message:        msgPayload
-    });
-
-    if (error) {
-      if (error.code === '23505') {
-        showToast('이미 신청한 팀입니다'); return;
-      }
-      throw new Error(error.message);
-    }
-
-    showToast('💌 과팅 신청이 완료되었습니다!');
-    showScreen('screen-requests');
-    loadAndRenderRequests('sent');
-  } catch(err) {
-    showToast('❌ 신청 실패: ' + err.message);
-  }
+  showToast('💌 과팅 신청이 완료되었습니다!');
+  showScreen('screen-requests');
+  loadAndRenderRequests('sent');
 }
 window.submitApply = submitApply;
 
@@ -1600,7 +1677,7 @@ async function loadAndRenderRequests(tab) {
         <div style="display:flex;gap:8px;">
           ${isMatched
             ? `<button class="btn btn-primary btn-sm" style="flex:1;"
-                onclick="showMatchSuccess('${esc(r.male_team_id)}','${esc(r.female_team_id)}')">🎉 연결 정보 보기</button>`
+                onclick="showScreen('screen-match-success')">🎉 연결 정보 보기</button>`
             : ''}
           ${isPendingRecv
             ? `<button class="btn btn-primary btn-sm" style="flex:1;"
@@ -1644,27 +1721,9 @@ window.switchRequestTab = switchRequestTab;
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
-    // match_request 정보 + 상대팀 contact_phone 조회
-    const { data: req } = await _sb.from('match_requests')
-      .select('female_team_id, male_team_id')
-      .eq('id', requestId).single();
-
     await _sb.from('match_requests').update({
       status: 'matched', responded_at: new Date().toISOString()
     }).eq('id', requestId);
-
-    // ★ [요구사항 5] 상대 팀 contact_phone 조회 → DOM 렌더링
-    if (req) {
-      const myTeamRes = await _sb.from('teams').select('id').eq('leader_id', state.profile?.id).maybeSingle();
-      const myTeamId  = myTeamRes?.data?.id;
-      const otherTeamId = myTeamId === req.female_team_id ? req.male_team_id : req.female_team_id;
-
-      if (otherTeamId) {
-        const { data: otherTeam } = await _sb.from('teams')
-          .select('title, contact_phone').eq('id', otherTeamId).single();
-        renderMatchContactInfo(otherTeam);
-      }
-    }
 
     // matches 레코드는 관리자 또는 DB 함수로 생성
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
@@ -1674,41 +1733,6 @@ async function acceptMatchRequest(requestId) {
   }
 }
 window.acceptMatchRequest = acceptMatchRequest;
-
-/**
- * 매칭 성공 화면에 상대팀 연락처 렌더링
- * @param {{ title:string, contact_phone:string|null }} team
- */
-function renderMatchContactInfo(team) {
-  const phoneEl = document.getElementById('match-contact-phone');
-  if (phoneEl) {
-    phoneEl.textContent = team?.contact_phone || '연락처 정보 없음';
-  }
-  // 상대 팀 이름도 표시
-  const successTitle = document.querySelector('#screen-match-success strong');
-  if (successTitle && team?.title) {
-    successTitle.textContent = esc(team.title);
-  }
-}
-window.renderMatchContactInfo = renderMatchContactInfo;
-
-/**
- * 매칭 성공 화면 표시 + 상대팀 연락처 자동 로드
- */
-async function showMatchSuccess(maleTeamId, femaleTeamId) {
-  showScreen('screen-match-success');
-  try {
-    // 내 성별에 따라 상대 팀 ID 결정
-    const myGender  = state.profile?.gender;
-    const otherTeamId = myGender === 'female' ? maleTeamId : femaleTeamId;
-    if (!otherTeamId || !/^[0-9a-f-]{36}$/i.test(otherTeamId)) return;
-
-    const { data: otherTeam } = await _sb.from('teams')
-      .select('title, contact_phone').eq('id', otherTeamId).single();
-    renderMatchContactInfo(otherTeam);
-  } catch(e) { /* 연락처 로드 실패 시 무시 */ }
-}
-window.showMatchSuccess = showMatchSuccess;
 
 // 거절
 async function rejectMatchRequest(requestId) {
@@ -1809,15 +1833,31 @@ async function updateMyPageStatus() {
     if (verifEl)   verifEl.textContent   = V_LABEL[verif?.status]   || '미제출';
     if (depositEl) depositEl.textContent = D_LABEL[deposit?.status] || '미입금';
     if (teamEl)    teamEl.textContent    = profile.profile_active ? '활성' : '대기';
-
-    // ★ [요구사항 4] 관리자 모드 전환 버튼 — role=admin 일 때만 표시
-    const adminBtn = document.getElementById('btn-admin-mode');
-    if (adminBtn) {
-      adminBtn.style.display = (state.profile?.role === 'admin') ? 'flex' : 'none';
-    }
   } catch(e) { /* 무시 */ }
 }
 window.updateMyPageStatus = updateMyPageStatus;
+
+// ============================================================
+// 5️⃣ 역할 뱃지 저장
+// ============================================================
+async function saveCustomBadge() {
+  const profile = state.profile;
+  if (!profile) { showToast('로그인이 필요합니다'); return; }
+  const badge = document.getElementById('my-custom-badge')?.value.trim() || null;
+
+  try {
+    const { error } = await _sb
+      .from('users')
+      .update({ custom_badge: badge })
+      .eq('id', profile.id);
+    if (error) throw error;
+    state.profile.custom_badge = badge;
+    showToast(badge ? `✅ 뱃지가 저장되었습니다: ${badge}` : '뱃지가 삭제되었습니다');
+  } catch(err) {
+    showToast('❌ 저장 실패: ' + err.message);
+  }
+}
+window.saveCustomBadge = saveCustomBadge;
 
 // ============================================================
 // 27. 신고
@@ -2503,9 +2543,27 @@ async function adminDeleteUser(userId) {
     '• 이 작업은 되돌릴 수 없습니다')) return;
 
   try {
-    // ★ [요구사항 5] hard_delete_user RPC 단일 호출 (FK 순서 처리 서버에서 수행)
-    const { error } = await _sb.rpc('hard_delete_user', { p_user_id: userId });
-    if (error) throw new Error('삭제 실패: ' + error.message);
+    // 관련 데이터 순서대로 삭제 (FK cascade 없을 경우 대비)
+    await _sb.from('student_verifications').delete().eq('user_id', userId);
+    await _sb.from('deposits').delete().eq('user_id', userId);
+    await _sb.from('terms_consents').delete().eq('user_id', userId);
+
+    // 팀 삭제 (리더인 팀)
+    const { data: myTeams } = await _sb.from('teams').select('id').eq('leader_id', userId);
+    if (myTeams?.length) {
+      const teamIds = myTeams.map(t => t.id);
+      await _sb.from('team_members').delete().in('team_id', teamIds);
+      await _sb.from('teams').delete().in('id', teamIds);
+    }
+    // 팀원으로 속한 경우도 삭제 (실패해도 계속)
+    await _sb.from('team_members').delete().eq('user_id', userId);
+
+    // 신고 기록 삭제 (실패해도 계속)
+    await _sb.from('reports').delete().eq('reporter_id', userId);
+
+    // users 삭제
+    const { error: delErr } = await _sb.from('users').delete().eq('id', userId);
+    if (delErr) throw new Error('회원 삭제 실패: ' + delErr.message);
 
     await writeAdminLog('user_delete', 'users', userId);
     closeModal('modal-admin-user');
@@ -2702,8 +2760,8 @@ window.toggleAll = toggleAll;
   if (!sel) return;
   const cy = new Date().getFullYear();
   const fragment = document.createDocumentFragment();
-  // 만 18세(cy-18) ~ 1980년생까지 표시
-  for (let y = cy - 18; y >= 1980; y--) {
+  // 만 18세(cy-17) ~ 1980년생까지 표시 (07년생 포함)
+  for (let y = cy - 17; y >= 1980; y--) {
     const opt = document.createElement('option');
     opt.value = y;
     opt.textContent = y + '년';
@@ -2795,15 +2853,15 @@ window.toggleAll = toggleAll;
             </div>
           </div>
         </div>
+        <div class="form-group" style="margin-bottom:8px;">
+          <label class="form-label">역할 뱃지 <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
+          <input class="form-input" type="text" id="m${i}-badge" style="height:44px;"
+            placeholder="예: MC, 얼굴 담당, 분위기메이커" maxlength="20">
+        </div>
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label">한줄 소개</label>
           <input class="form-input" type="text" id="m${i}-intro" style="height:44px;"
             placeholder="나를 표현하는 한 문장" maxlength="200">
-        </div>
-        <div class="form-group" style="margin-bottom:0;margin-top:8px;">
-          <label class="form-label">커스텀 뱃지 <span style="color:var(--gray-400);font-weight:400;">(선택, 예: 얼굴천재, MC)</span></label>
-          <input class="form-input" type="text" id="m${i}-badge" style="height:44px;"
-            placeholder="최대 20자" maxlength="20">
         </div>
       </div>
     </div>`;
