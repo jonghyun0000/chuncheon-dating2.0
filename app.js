@@ -64,6 +64,61 @@ function setText(id, text) {
   if (el) el.textContent = text ?? '';
 }
 
+const IMAGE_MIME_BY_EXT = {
+  jpg:  'image/jpeg',
+  jpeg: 'image/jpeg',
+  png:  'image/png',
+  webp: 'image/webp'
+};
+
+function getFileExt(fileName) {
+  const rawExt = String(fileName || '').split('.').pop().toLowerCase();
+  return rawExt.replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeImageMime(file) {
+  const ext = getFileExt(file?.name);
+  const rawType = String(file?.type || '').trim().toLowerCase();
+
+  if (rawType === 'image/jpg') return { ext, mime: 'image/jpeg' };
+  if (IMAGE_MIME_BY_EXT[ext] && (!rawType || rawType === 'application/octet-stream')) {
+    return { ext, mime: IMAGE_MIME_BY_EXT[ext] };
+  }
+  return { ext, mime: rawType };
+}
+
+function validateUploadImage(file) {
+  if (!file) {
+    return { ok: false, message: '학생증 이미지를 업로드해주세요.' };
+  }
+
+  const { ext, mime } = normalizeImageMime(file);
+  const allowedMimes = new Set(Object.values(IMAGE_MIME_BY_EXT));
+  const allowedExts = new Set(Object.keys(IMAGE_MIME_BY_EXT));
+  const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+
+  if (!allowedExts.has(ext)) {
+    return {
+      ok: false,
+      message: `❌ 파일 확장자가 올바르지 않습니다 (.${esc(ext || '없음')}). jpg·jpeg·png·webp만 가능합니다.`
+    };
+  }
+  if (!allowedMimes.has(mime)) {
+    return {
+      ok: false,
+      message: `❌ 지원하지 않는 파일 형식입니다 (${esc(file.type || '알 수 없음')}). JPG·PNG·WEBP만 가능합니다.`
+    };
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    return {
+      ok: false,
+      message: `❌ 파일 크기 초과: ${fileSizeMB}MB. 10MB 이하 파일만 업로드 가능합니다.`
+    };
+  }
+
+  return { ok: true, ext, mime, fileSizeMB };
+}
+
 // ============================================================
 // 4. 토스트 / 로딩 상태
 // ============================================================
@@ -628,20 +683,37 @@ window.updateHomeStats = updateHomeStats;
  * @returns {Promise<boolean>}   사용 가능하면 true, 중복이면 false
  */
 async function _checkUsernameAvailable(username, silent = false) {
+  const resultEl = document.getElementById('username-check-result');
+  const input = document.getElementById('reg-username');
+  const setInlineResult = (ok, msg) => {
+    if (resultEl) {
+      resultEl.textContent = msg || '';
+      resultEl.style.color = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
+      resultEl.style.fontSize = '12px';
+      resultEl.style.marginTop = '6px';
+      resultEl.style.fontWeight = '600';
+    }
+    if (input) input.style.borderColor = msg ? (ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)') : '';
+  };
+
   if (!username || username.length < 4) {
+    setInlineResult(false, '아이디는 4자 이상이어야 합니다');
     if (!silent) showToast('아이디는 4자 이상이어야 합니다');
     return false;
   }
   if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+    setInlineResult(false, '아이디는 영문·숫자·밑줄만 사용 가능합니다');
     if (!silent) showToast('아이디는 영문·숫자·밑줄만 사용 가능합니다');
     return false;
   }
   const { data } = await _sb
     .from('users').select('id').eq('username', username).maybeSingle();
   if (data) {
+    setInlineResult(false, '❌ 이미 사용 중인 아이디입니다. 다른 아이디를 입력해주세요.');
     if (!silent) showToast('❌ 이미 사용 중인 아이디입니다');
     return false;
   }
+  setInlineResult(true, '✅ 사용 가능한 아이디입니다');
   if (!silent) showToast('✅ 사용 가능한 아이디입니다');
   return true;
 }
@@ -654,21 +726,10 @@ async function _checkUsernameAvailable(username, silent = false) {
 async function checkUsernameBtn() {
   const input = document.getElementById('reg-username');
   const username = input?.value.trim() ?? '';
-  const resultEl = document.getElementById('username-check-result');
 
   setBtnLoading('btn-check-username', true, '확인');
   try {
     const ok = await _checkUsernameAvailable(username, true);
-
-    // 결과 영역이 HTML에 있으면 인라인으로도 표시
-    if (resultEl) {
-      resultEl.textContent = ok ? '✅ 사용 가능한 아이디입니다' : '❌ 이미 사용 중인 아이디입니다';
-      resultEl.style.color = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
-      resultEl.style.fontSize = '12px';
-      resultEl.style.marginTop = '4px';
-    }
-    // 입력 필드 테두리로 즉각 피드백
-    if (input) input.style.borderColor = ok ? 'var(--success, #388E3C)' : 'var(--error, #D32F2F)';
 
     // 중복이면 토스트로도 알림
     if (!ok) showToast('❌ 이미 사용 중인 아이디입니다');
@@ -686,6 +747,7 @@ function onUsernameInput() {
   const resultEl = document.getElementById('username-check-result');
   const input    = document.getElementById('reg-username');
   if (resultEl) resultEl.textContent = '';
+  if (resultEl) resultEl.removeAttribute('style');
   if (input)    input.style.borderColor = '';
 }
 window.onUsernameInput = onUsernameInput;
@@ -792,27 +854,11 @@ async function submitVerification() {
   if (!d) { showToast('회원가입 정보가 없습니다. 처음부터 다시 시작해주세요.'); return; }
 
   const fileInput = document.getElementById('file-input');
-  const file = fileInput?.files?.[0];
-  if (!file) { showToast('학생증 이미지를 업로드해주세요'); return; }
+  const file = fileInput?.files?.[0] || state.uploadedFile;
+  const validation = validateUploadImage(file);
+  if (!validation.ok) { showToast(validation.message); return; }
 
-  // ── 파일 검증
-  const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-  const ALLOWED_EXTS  = ['jpg', 'jpeg', 'png', 'webp'];
-  const fileExt = file.name.split('.').pop().toLowerCase().replace(/[^a-z]/g, '');
-
-  if (!ALLOWED_TYPES.includes(file.type)) {
-    showToast(`❌ 지원하지 않는 파일 형식입니다 (${esc(file.type || '알 수 없음')}). JPG·PNG·WEBP만 가능합니다.`);
-    return;
-  }
-  if (!ALLOWED_EXTS.includes(fileExt)) {
-    showToast(`❌ 파일 확장자가 올바르지 않습니다 (.${esc(fileExt)}). jpg·png·webp 중 하나여야 합니다.`);
-    return;
-  }
-  const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-  if (file.size > 10 * 1024 * 1024) {
-    showToast(`❌ 파일 크기 초과: ${fileSizeMB}MB. 10MB 이하 파일만 업로드 가능합니다.`);
-    return;
-  }
+  const { ext: fileExt, mime: normalizedMime, fileSizeMB } = validation;
 
   setBtnLoading('btn-verify', true, '업로드 완료');
   try {
@@ -958,7 +1004,7 @@ async function submitVerification() {
 
     const { error: uploadErr } = await _sb.storage
       .from('student-verifications')
-      .upload(filePath, file, { contentType: file.type, upsert: false });
+      .upload(filePath, file, { contentType: normalizedMime, upsert: false });
 
     if (uploadErr) {
       let uploadMsg;
@@ -2492,9 +2538,13 @@ function triggerUpload() { document.getElementById('file-input')?.click(); }
 function handleFileSelect(input) {
   const file = input.files?.[0];
   if (!file) return;
-  const ALLOWED = ['image/jpeg','image/png','image/webp'];
-  if (!ALLOWED.includes(file.type)) { showToast('JPG, PNG 파일만 업로드 가능합니다'); return; }
-  if (file.size > 10*1024*1024)     { showToast('10MB 이하 파일만 업로드 가능합니다'); return; }
+  const validation = validateUploadImage(file);
+  if (!validation.ok) {
+    input.value = '';
+    state.uploadedFile = null;
+    showToast(validation.message);
+    return;
+  }
   state.uploadedFile = file;
   // textContent로 XSS 방어
   setText('upload-icon',  '✅');
