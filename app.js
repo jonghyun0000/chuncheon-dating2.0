@@ -758,7 +758,7 @@ async function goToVerification() {
   if (!university || university === '')  { showToast('대학교를 선택해주세요'); return; }
   if (!department || department.length < 2){ showToast('학과를 입력해주세요'); return; }
   if (!studentNum || studentNum.length < 6){ showToast('학번을 입력해주세요'); return; }
-  if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 17) {
+  if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 18) {
     showToast('만 18세 이상만 가입할 수 있습니다'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
@@ -1043,11 +1043,36 @@ async function submitVerification() {
     }
 
     // ── STEP 5: student_verifications 저장 (이미 있으면 무시)
-    const { error: verifErr } = await _sb.from('student_verifications').insert({
-      user_id: profile.id, image_path: filePath, status: 'pending'
-    });
+    // ★ 모바일에서 signUp 직후 세션이 느리게 확정돼 42501(RLS) 오류 발생 가능
+    //   → 세션을 명시적으로 재확인하고 최대 3회 재시도
+    let verifErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // 세션 재확인 (모바일 지연 대응)
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, 800 * attempt));
+        const { data: { session: retrySession } } = await _sb.auth.getSession().catch(() => ({ data: { session: null } }));
+        if (!retrySession) {
+          // 세션 없으면 signIn으로 복구 시도
+          const email = `${profile.username}@chuncheon-dating.local`;
+          await _sb.auth.signInWithPassword({ email, password: state.regData?.password || '' }).catch(() => {});
+        }
+      }
+      const { error } = await _sb.from('student_verifications').insert({
+        user_id: profile.id, image_path: filePath, status: 'pending'
+      });
+      verifErr = error;
+      if (!verifErr || verifErr.code === '23505') break; // 성공 또는 중복(이미 있음)이면 종료
+      console.warn(`[SV] student_verifications 저장 시도 ${attempt + 1} 실패:`, verifErr.code, verifErr.message);
+    }
     if (verifErr && verifErr.code !== '23505') {
-      throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
+      // 3회 모두 실패 시: RLS 오류면 관리자 수동 처리 안내로 폴백 (가입은 완료 처리)
+      if (verifErr.code === '42501') {
+        console.error('[SV] student_verifications RLS 오류 — 관리자 수동 처리 필요:', profile.id);
+        showToast('⚠️ 학생증 등록 중 권한 오류가 발생했습니다. 관리자에게 문의해주세요.', 5000);
+        // 가입 자체는 완료 처리 (입금 화면으로 이동)
+      } else {
+        throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
+      }
     }
 
     // ── STEP 6: deposits 초기 레코드 (이미 있으면 무시 — .catch() 금지)
@@ -1400,57 +1425,23 @@ async function registerTeam() {
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
-    // ★ DB에 없는 컬럼(is_verified, contact_phone)이 있을 수 있으므로
-    //   단계적으로 제외하며 재시도하는 안전한 INSERT
-    const isMissingCol = (err) =>
-      err?.message?.includes('schema cache') ||
-      err?.message?.includes('Could not find') ||
-      err?.code === 'PGRST204';
-
-    // 시도 1: 전체 컬럼
-    let team, teamErr;
-    ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+    const { data: team, error: teamErr } = await _sb.from('teams').insert({
       leader_id:    profile.id,
       gender:       profile.gender,
       title,
       university:   profile.university,
       status:       'recruiting',
       contact_phone: phoneNum,
-      is_verified:  isVerified
-    }).select().single());
-
-    // 시도 2: is_verified 제외
-    if (teamErr && isMissingCol(teamErr)) {
-      console.warn('[registerTeam] 컬럼 오류, is_verified 제외 재시도:', teamErr.message);
-      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
-        leader_id:    profile.id,
-        gender:       profile.gender,
-        title,
-        university:   profile.university,
-        status:       'recruiting',
-        contact_phone: phoneNum
-      }).select().single());
-    }
-
-    // 시도 3: contact_phone도 제외
-    if (teamErr && isMissingCol(teamErr)) {
-      console.warn('[registerTeam] 컬럼 오류, contact_phone도 제외 재시도:', teamErr.message);
-      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
-        leader_id:  profile.id,
-        gender:     profile.gender,
-        title,
-        university: profile.university,
-        status:     'recruiting'
-      }).select().single());
-    }
-
+      is_verified:  isVerified   // 인증완료 여부 — 상단 노출 기준
+    }).select().single();
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
 
     const memberRows = members.map(m => ({ ...m, team_id: team.id }));
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
     if (memberErr) throw new Error('팀원 등록 실패: ' + memberErr.message);
 
-    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)`);
+    const verifiedMsg = isVerified ? ' (✅ 인증완료 — 상단 노출)' : ' (인증 미완료 — 완료 시 상단 노출)';
+    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)${verifiedMsg}`);
     await loadTeams();
     showScreen('screen-home');
   } catch(err) {
@@ -2613,8 +2604,8 @@ window.toggleAll = toggleAll;
   if (!sel) return;
   const cy = new Date().getFullYear();
   const fragment = document.createDocumentFragment();
-  // 만 18세(cy-17) ~ 1980년생까지 표시 (07년생 포함)
-  for (let y = cy - 17; y >= 1980; y--) {
+  // 만 18세(cy-18) ~ 1980년생까지 표시
+  for (let y = cy - 18; y >= 1980; y--) {
     const opt = document.createElement('option');
     opt.value = y;
     opt.textContent = y + '년';
