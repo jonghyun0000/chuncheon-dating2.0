@@ -886,12 +886,17 @@ async function submitVerification() {
     // STEP 2 — users 프로필 저장 (멱등: 이미 있으면 스킵)
     // ════════════════════════════════════════════════════
     let profile = null;
-    const { data: existing } = await _sb
-      .from('users').select('*').eq('auth_id', signUpUid).maybeSingle()
-      .catch(() => ({ data: null }));
 
-    if (existing) {
-      profile = existing;
+    // 기존 프로필 조회 — .catch() 금지, try/catch로 처리
+    let existingProfile = null;
+    try {
+      const { data: ep } = await _sb
+        .from('users').select('*').eq('auth_id', signUpUid).maybeSingle();
+      existingProfile = ep;
+    } catch(_) { existingProfile = null; }
+
+    if (existingProfile) {
+      profile = existingProfile;
       console.info('[SV] 기존 프로필 재사용:', profile.id);
     } else {
       const { data: newP, error: profileErr } = await _sb.from('users').insert({
@@ -913,13 +918,18 @@ async function submitVerification() {
       }).select().single();
 
       if (profileErr) {
-        // 이미 username 중복(23505) → 방금 다른 탭/요청에서 저장된 경우 재조회
         if (profileErr.code === '23505') {
-          const { data: retry } = await _sb
-            .from('users').select('*').eq('auth_id', signUpUid).maybeSingle()
-            .catch(() => ({ data: null }));
-          if (retry) { profile = retry; }
-          else {
+          // 중복 시 재조회
+          let retryProfile = null;
+          try {
+            const { data: rp } = await _sb
+              .from('users').select('*').eq('auth_id', signUpUid).maybeSingle();
+            retryProfile = rp;
+          } catch(_) {}
+
+          if (retryProfile) {
+            profile = retryProfile;
+          } else {
             state.regData = null;
             throw new Error('아이디 중복 오류입니다. 다른 아이디로 다시 시작해주세요.');
           }
@@ -935,16 +945,17 @@ async function submitVerification() {
 
     if (!profile) throw new Error('프로필을 확보할 수 없습니다. 관리자에게 문의하세요.');
 
-    // ── STEP 3: 동의 항목 (이미 있으면 무시)
+    // ── STEP 3: 동의 항목 (이미 있으면 무시 — .catch() 금지)
     const c = d.consents;
-    await _sb.from('terms_consents').insert({
+    const { error: consentErr } = await _sb.from('terms_consents').insert({
       user_id: profile.id, is_adult: true, terms_agree: true,
       privacy_agree: true, verification_agree: true,
       deposit_agree: true, falsify_agree: true,
       marketing_agree: !!c.marketingAgree
-    }).catch(e => {
-      if (e?.code !== '23505') console.warn('[SV] 동의 저장 실패(무시):', e?.message);
     });
+    if (consentErr && consentErr.code !== '23505') {
+      console.warn('[SV] 동의 저장 실패(무시):', consentErr.message);
+    }
 
     // ════════════════════════════════════════════════════
     // STEP 4 — Storage 업로드
@@ -995,14 +1006,15 @@ async function submitVerification() {
       throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
     }
 
-    // ── STEP 6: deposits 초기 레코드 (이미 있으면 무시)
+    // ── STEP 6: deposits 초기 레코드 (이미 있으면 무시 — .catch() 금지)
     const fee = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
-    await _sb.from('deposits').insert({
+    const { error: depositErr } = await _sb.from('deposits').insert({
       user_id: profile.id, depositor_name: profile.nickname,
       amount: fee, status: 'pending_confirm'
-    }).catch(e => {
-      if (e?.code !== '23505') console.warn('[SV] deposits 저장 실패(무시):', e?.code, e?.message);
     });
+    if (depositErr && depositErr.code !== '23505') {
+      console.warn('[SV] deposits 저장 실패(무시):', depositErr.code, depositErr.message);
+    }
 
     // ── 완료
     state.profile = profile;
@@ -2318,11 +2330,11 @@ async function adminDeleteUser(userId) {
       await _sb.from('team_members').delete().in('team_id', teamIds);
       await _sb.from('teams').delete().in('id', teamIds);
     }
-    // 팀원으로 속한 경우도 삭제
-    await _sb.from('team_members').delete().eq('user_id', userId).catch(() => {});
+    // 팀원으로 속한 경우도 삭제 (실패해도 계속)
+    await _sb.from('team_members').delete().eq('user_id', userId);
 
-    // 신고 기록
-    await _sb.from('reports').delete().eq('reporter_id', userId).catch(() => {});
+    // 신고 기록 삭제 (실패해도 계속)
+    await _sb.from('reports').delete().eq('reporter_id', userId);
 
     // users 삭제
     const { error: delErr } = await _sb.from('users').delete().eq('id', userId);
