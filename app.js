@@ -1160,7 +1160,7 @@ async function openTeamDetail(teamId) {
 window.openTeamDetail = openTeamDetail;
 
 // ============================================================
-// 22. 팀 등록 (활성 사용자만)
+// 22. 팀 등록 (활성 사용자만) — 팀원 1~3명, 연락처(카카오/전화) 선택
 // ============================================================
 async function registerTeam() {
   const profile = state.profile;
@@ -1170,47 +1170,70 @@ async function registerTeam() {
   const title = document.getElementById('team-title')?.value.trim();
   if (!title || title.length < 2) { showToast('팀 제목을 2자 이상 입력해주세요'); return; }
 
+  // ── 팀원 수집: 1번은 필수, 2·3번은 닉네임이 있을 때만 포함
   const members = [];
   for (let i = 1; i <= 3; i++) {
     const nickname = document.getElementById(`m${i}-nickname`)?.value.trim();
     const age      = parseInt(document.getElementById(`m${i}-age`)?.value || '0');
     const dept     = document.getElementById(`m${i}-dept`)?.value.trim();
 
+    // 2·3번: 닉네임이 비어있으면 건너뜀 (선택)
+    if (i > 1 && !nickname) continue;
+
+    // 1번(팀장)은 필수 검증
     if (!nickname) { showToast(`팀원 ${i}의 닉네임을 입력해주세요`); return; }
     if (!age || age < 19 || age > 60) { showToast(`팀원 ${i}의 나이는 19~60세여야 합니다`); return; }
     if (!dept || dept.length < 2) { showToast(`팀원 ${i}의 학과를 입력해주세요`); return; }
 
-    if (i > 1 && !document.getElementById(`verif-confirm-${i}`)?.checked) {
-      showToast(`팀원 ${i}의 인증 확인 체크박스를 체크해주세요`);
-      return;
+    // 2·3번: 닉네임이 있으면 나이·학과도 필수
+    if (i > 1 && nickname) {
+      if (!age || age < 19 || age > 60) { showToast(`팀원 ${i}의 나이를 확인해주세요`); return; }
+      if (!dept || dept.length < 2) { showToast(`팀원 ${i}의 학과를 입력해주세요`); return; }
+      if (!document.getElementById(`verif-confirm-${i}`)?.checked) {
+        showToast(`팀원 ${i}의 인증 확인 체크박스를 체크해주세요`); return;
+      }
     }
 
     const smoking = document.querySelector(`input[name="smoke${i}"]:checked`)?.id === `s${i}`;
     const mbtiEl  = document.querySelector(`#member-card-${i} select`);
-    const introEl = document.querySelector(`#member-card-${i} input[type="text"]:last-child`);
+    const introEl = document.getElementById(`m${i}-intro`);
     members.push({
       nickname, age, department: dept, smoking,
-      mbti: mbtiEl?.value || null,
+      mbti:  mbtiEl?.value  || null,
       intro: introEl?.value.trim() || null,
       is_leader: i === 1, sort_order: i - 1
     });
   }
 
-  // ★ 수정 3: 빈 문자열을 null로 변환 및 유효성 검사 적용
-  let kakaoLink = document.getElementById('kakao-link')?.value.trim();
+  if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
+
+  // ── 연락처: 카카오 오픈채팅 OR 전화번호 (하나 이상 필수)
+  let kakaoLink = document.getElementById('kakao-link')?.value.trim() || null;
+  let phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
+
   if (kakaoLink === '') kakaoLink = null;
+  if (phoneNum  === '') phoneNum  = null;
+
+  if (!kakaoLink && !phoneNum) {
+    showToast('카카오 오픈채팅 링크 또는 연락처 전화번호 중 하나는 필수입니다'); return;
+  }
   if (kakaoLink && !kakaoLink.startsWith('https://')) {
-    showToast('카카오톡 링크는 https:// 로 시작해야 합니다');
-    return;
+    showToast('카카오톡 링크는 https:// 로 시작해야 합니다'); return;
+  }
+  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
   }
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
     const { data: team, error: teamErr } = await _sb.from('teams').insert({
-      leader_id: profile.id, gender: profile.gender,
-      title, university: profile.university,
-      status: 'recruiting',
-      kakao_open_link: kakaoLink
+      leader_id:      profile.id,
+      gender:         profile.gender,
+      title,
+      university:     profile.university,
+      status:         'recruiting',
+      kakao_open_link: kakaoLink,
+      contact_phone:  phoneNum          // teams 테이블에 contact_phone 컬럼 필요
     }).select().single();
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
 
@@ -1218,7 +1241,7 @@ async function registerTeam() {
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
     if (memberErr) throw new Error('팀원 등록 실패: ' + memberErr.message);
 
-    showToast('🎉 팀이 등록되었습니다!');
+    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)`);
     await loadTeams();
     showScreen('screen-home');
   } catch(err) {
@@ -1813,27 +1836,55 @@ async function switchAdminTab(tab, el) {
 
   // ── 팀 목록
   if (tab === 'teams') {
-    const { data: teams } = await _sb
+    const { data: teams, error: teamsErr } = await _sb
       .from('teams').select('*, team_members(*)')
       .order('created_at', { ascending: false });
 
+    if (teamsErr) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div>
+        <div class="empty-title">팀 목록 조회 실패</div>
+        <div class="empty-desc">${esc(teamsErr.message)}</div></div>`;
+      return;
+    }
+
+    const recruitingCount = (teams||[]).filter(t => t.status === 'recruiting').length;
+    const hiddenCount     = (teams||[]).filter(t => t.status === 'hidden').length;
+
     container.innerHTML = `
-      <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">👥 팀 관리</div>
+      <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">
+        👥 팀 관리
+        <span style="font-size:12px;font-weight:400;color:var(--gray-500);margin-left:8px;">
+          모집중 ${recruitingCount} · 숨김 ${hiddenCount}
+        </span>
+      </div>
       <div class="menu-list">
         ${(teams||[]).length === 0
           ? '<div class="empty-state"><div class="empty-icon">👥</div><div class="empty-title">등록된 팀 없음</div></div>'
-          : (teams||[]).map(t => `
-            <div class="admin-list-item">
-              <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                <span style="font-weight:700;">${esc(t.title)}</span>
-                <span class="chip ${t.status==='recruiting'?'chip-green':'chip-gray'}">${esc(t.status)}</span>
-              </div>
-              <p style="font-size:12px;color:var(--gray-500);margin-bottom:8px;">
-                ${esc(t.university)} · ${t.gender==='male'?'남성':'여성'} · 팀원 ${(t.team_members||[]).length}명
-              </p>
-              <button class="btn btn-outline btn-sm"
-                onclick="adminHideTeam('${esc(t.id)}')">숨김 처리</button>
-            </div>`).join('')}
+          : (teams||[]).map(t => {
+              const isRecruiting = t.status === 'recruiting';
+              return `
+              <div class="admin-list-item">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                  <span style="font-weight:700;">${esc(t.title)}</span>
+                  <span class="chip ${isRecruiting ? 'chip-green' : 'chip-gray'}">
+                    ${isRecruiting ? '🟢 모집중' : '⚫ 숨김'}
+                  </span>
+                </div>
+                <p style="font-size:12px;color:var(--gray-500);margin-bottom:10px;">
+                  ${esc(t.university)} · ${t.gender==='male'?'남성':'여성'} · 팀원 ${(t.team_members||[]).length}명
+                  · ${new Date(t.created_at).toLocaleDateString('ko-KR')}
+                </p>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  ${isRecruiting
+                    ? `<button class="btn btn-outline btn-sm"
+                        onclick="adminHideTeam('${esc(t.id)}')">⏸️ 숨김</button>`
+                    : `<button class="btn btn-primary btn-sm"
+                        onclick="adminRestoreTeam('${esc(t.id)}')">▶️ 복원</button>`}
+                  <button class="btn btn-danger btn-sm"
+                    onclick="adminDeleteTeam('${esc(t.id)}')">🗑️ 삭제</button>
+                </div>
+              </div>`;
+            }).join('')}
       </div>`;
   }
 }
@@ -1937,8 +1988,12 @@ async function openAdminUserDetail(userId) {
       ${!u.is_banned
         ? `<button class="btn btn-danger btn-sm" onclick="adminBanUser('${esc(u.id)}',null)">🚫 이용 제한</button>`
         : `<button class="btn btn-primary btn-sm" onclick="adminUnbanUser('${esc(u.id)}')">✅ 제재 해제</button>`}
-      <button class="btn btn-outline btn-sm" onclick="closeModal('modal-admin-user')">닫기</button>
-    </div>`;
+      ${u.profile_active
+        ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">⏸️ 비활성화</button>`
+        : `<button class="btn btn-secondary btn-sm" onclick="adminActivateUser('${esc(u.id)}')">▶️ 활성화</button>`}
+    </div>
+    <button class="btn btn-outline btn-sm" style="width:100%;"
+      onclick="closeModal('modal-admin-user')">닫기</button>`;
 
   document.getElementById('modal-admin-user')?.classList.add('show');
 }
@@ -2093,6 +2148,78 @@ async function adminHideTeam(teamId) {
 }
 window.adminHideTeam = adminHideTeam;
 
+// 팀 모집 재개 (숨김 → 모집중 복원)
+async function adminRestoreTeam(teamId) {
+  try { assertAdmin(); } catch { return; }
+  if (!confirm('이 팀을 모집중으로 복원하시겠습니까?')) return;
+
+  try {
+    await _sb.from('teams').update({ is_visible: true, status: 'recruiting' }).eq('id', teamId);
+    await writeAdminLog('team_restore', 'teams', teamId);
+    showToast('✅ 팀이 모집중으로 복원되었습니다');
+    switchAdminTab('teams', null);
+  } catch(err) {
+    showToast('❌ ' + err.message);
+  }
+}
+window.adminRestoreTeam = adminRestoreTeam;
+
+// 팀 완전 삭제 (team_members 포함 cascade — DB FK ON DELETE CASCADE 권장)
+async function adminDeleteTeam(teamId) {
+  try { assertAdmin(); } catch { return; }
+  if (!confirm('⚠️ 이 팀을 완전히 삭제하시겠습니까?\n팀원 데이터도 함께 삭제됩니다. 되돌릴 수 없습니다.')) return;
+
+  try {
+    // 팀원 먼저 삭제 (FK cascade가 없을 경우 대비)
+    await _sb.from('team_members').delete().eq('team_id', teamId);
+    const { error } = await _sb.from('teams').delete().eq('id', teamId);
+    if (error) throw new Error('팀 삭제 실패: ' + error.message);
+
+    await writeAdminLog('team_delete', 'teams', teamId);
+    showToast('🗑️ 팀이 삭제되었습니다');
+    switchAdminTab('teams', null);
+  } catch(err) {
+    showToast('❌ ' + err.message);
+  }
+}
+window.adminDeleteTeam = adminDeleteTeam;
+
+// 회원 활성화 (profile_active = true)
+async function adminActivateUser(userId) {
+  try { assertAdmin(); } catch { return; }
+  if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
+  if (!confirm('이 회원을 활성화하시겠습니까?')) return;
+
+  try {
+    await _sb.from('users').update({ profile_active: true }).eq('id', userId);
+    await writeAdminLog('user_activate', 'users', userId);
+    closeModal('modal-admin-user');
+    showToast('✅ 회원이 활성화되었습니다');
+    switchAdminTab('users', null);
+  } catch(err) {
+    showToast('❌ ' + err.message);
+  }
+}
+window.adminActivateUser = adminActivateUser;
+
+// 회원 비활성화 (profile_active = false)
+async function adminDeactivateUser(userId) {
+  try { assertAdmin(); } catch { return; }
+  if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
+  if (!confirm('이 회원을 비활성화하시겠습니까?\n서비스 이용이 제한됩니다.')) return;
+
+  try {
+    await _sb.from('users').update({ profile_active: false }).eq('id', userId);
+    await writeAdminLog('user_deactivate', 'users', userId);
+    closeModal('modal-admin-user');
+    showToast('⏸️ 회원이 비활성화되었습니다');
+    switchAdminTab('users', null);
+  } catch(err) {
+    showToast('❌ ' + err.message);
+  }
+}
+window.adminDeactivateUser = adminDeactivateUser;
+
 // 신고 기각
 async function adminDismissReport(reportId) {
   try { assertAdmin(); } catch { return; }
@@ -2201,7 +2328,7 @@ window.toggleAll = toggleAll;
   sel.appendChild(fragment);
 })();
 
-// 팀원 폼 초기화
+// 팀원 폼 초기화 — 팀원 1명 필수 / 2·3번 선택(접기/펼치기)
 (function initTeamForms() {
   const container = document.getElementById('team-member-forms');
   if (!container) return;
@@ -2214,72 +2341,122 @@ window.toggleAll = toggleAll;
     return opt.outerHTML;
   }).join('');
 
-  // innerHTML 사용 (정적 UI, 사용자 데이터 없음)
-  container.innerHTML = [1,2,3].map(i => `
+  // 팀원 카드 생성 함수
+  function memberCard(i) {
+    const isLeader   = i === 1;
+    const isOptional = i > 1;
+    return `
     <div class="card card-p" style="margin-bottom:12px;" id="member-card-${i}">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-        <div style="background:${i===1?'var(--pink)':'var(--purple)'};color:white;width:24px;height:24px;
-          border-radius:50%;display:flex;align-items:center;justify-content:center;
-          font-size:12px;font-weight:700;">${i}</div>
-        <span style="font-size:14px;font-weight:700;">팀원 ${i}${i===1?' (나)':''}</span>
-        ${i===1?'<span class="chip chip-pink">팀장</span><span class="chip chip-green">✅ 인증완료</span>':''}
-        ${i>1?`<span class="chip chip-orange" id="verif-status-${i}">⚠️ 인증 미확인</span>`:''}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:${isOptional ? '0' : '12px'};">
+        <div style="background:${isLeader ? 'var(--pink)' : 'var(--purple)'};color:white;
+          width:24px;height:24px;border-radius:50%;
+          display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">${i}</div>
+        <span style="font-size:14px;font-weight:700;flex:1;">
+          팀원 ${i}${isLeader ? ' (나·팀장)' : ' (선택)'}
+        </span>
+        ${isLeader
+          ? '<span class="chip chip-pink">팀장</span><span class="chip chip-green">✅ 인증완료</span>'
+          : `<span class="chip chip-orange" id="verif-status-${i}">⚠️ 미확인</span>
+             <button type="button" onclick="toggleMemberCard(${i})"
+               id="toggle-btn-${i}"
+               style="background:none;border:none;font-size:18px;cursor:pointer;padding:0 4px;color:var(--gray-400);">＋</button>`}
       </div>
-      ${i>1?`<div style="background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;
-          padding:10px 12px;margin-bottom:10px;">
-        <label class="checkbox-item" style="align-items:center;">
-          <input type="checkbox" id="verif-confirm-${i}"
-            onchange="handleVerifConfirm(${i},this)">
-          <span class="checkbox-box"></span>
-          <span style="font-size:12px;color:#795548;">
-            팀원 ${i}이 앱 <strong>가입+학생증 인증 승인</strong> 완료 회원임을 확인했습니다
-          </span>
-        </label>
-      </div>`:''}
-      <div class="form-group" style="margin-bottom:8px;">
-        <label class="form-label">닉네임 <span class="required">*</span></label>
-        <input class="form-input" type="text" id="m${i}-nickname" style="height:44px;"
-          placeholder="${i===1?'본인 닉네임':'팀원 닉네임'}"
-          maxlength="50" autocomplete="off">
-      </div>
-      <div class="form-row" style="margin-bottom:8px;">
-        <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">나이 <span class="required">*</span></label>
-          <input class="form-input" type="number" id="m${i}-age"
-            style="height:44px;" placeholder="22" min="19" max="60">
+
+      <!-- 2·3번: 기본 접힘, 버튼으로 펼침 -->
+      <div id="member-fields-${i}" style="${isOptional ? 'display:none;' : ''}margin-top:${isOptional ? '12px' : '0'};">
+        ${isOptional ? `
+        <div style="background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;
+            padding:10px 12px;margin-bottom:10px;">
+          <label class="checkbox-item" style="align-items:center;">
+            <input type="checkbox" id="verif-confirm-${i}" onchange="handleVerifConfirm(${i},this)">
+            <span class="checkbox-box"></span>
+            <span style="font-size:12px;color:#795548;">
+              팀원 ${i}이 앱 <strong>가입+학생증 인증 승인</strong> 완료 회원임을 확인했습니다
+            </span>
+          </label>
+        </div>` : ''}
+        <div class="form-group" style="margin-bottom:8px;">
+          <label class="form-label">닉네임${isLeader ? ' <span class="required">*</span>' : ''}</label>
+          <input class="form-input" type="text" id="m${i}-nickname" style="height:44px;"
+            placeholder="${isLeader ? '본인 닉네임' : '팀원 닉네임'}" maxlength="50" autocomplete="off">
         </div>
-        <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">MBTI</label>
-          <select class="form-select" style="height:44px;">
-            <option value="">선택</option>${mbtiOpts}
-          </select>
-        </div>
-      </div>
-      <div class="form-group" style="margin-bottom:8px;">
-        <label class="form-label">학과 <span class="required">*</span></label>
-        <input class="form-input" type="text" id="m${i}-dept"
-          style="height:44px;" placeholder="학과명" maxlength="100">
-      </div>
-      <div class="form-group" style="margin-bottom:8px;">
-        <label class="form-label">흡연 여부</label>
-        <div class="radio-group" style="gap:8px;">
-          <div class="radio-item">
-            <input type="radio" name="smoke${i}" id="ns${i}" checked>
-            <label class="radio-label" for="ns${i}" style="font-size:13px;">🚭 비흡연</label>
+        <div class="form-row" style="margin-bottom:8px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">나이${isLeader ? ' <span class="required">*</span>' : ''}</label>
+            <input class="form-input" type="number" id="m${i}-age"
+              style="height:44px;" placeholder="22" min="19" max="60">
           </div>
-          <div class="radio-item">
-            <input type="radio" name="smoke${i}" id="s${i}">
-            <label class="radio-label" for="s${i}" style="font-size:13px;">🚬 흡연</label>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">MBTI</label>
+            <select class="form-select" id="m${i}-mbti" style="height:44px;">
+              <option value="">선택</option>${mbtiOpts}
+            </select>
           </div>
         </div>
+        <div class="form-group" style="margin-bottom:8px;">
+          <label class="form-label">학과${isLeader ? ' <span class="required">*</span>' : ''}</label>
+          <input class="form-input" type="text" id="m${i}-dept"
+            style="height:44px;" placeholder="학과명" maxlength="100">
+        </div>
+        <div class="form-group" style="margin-bottom:8px;">
+          <label class="form-label">흡연 여부</label>
+          <div class="radio-group" style="gap:8px;">
+            <div class="radio-item">
+              <input type="radio" name="smoke${i}" id="ns${i}" checked>
+              <label class="radio-label" for="ns${i}" style="font-size:13px;">🚭 비흡연</label>
+            </div>
+            <div class="radio-item">
+              <input type="radio" name="smoke${i}" id="s${i}">
+              <label class="radio-label" for="s${i}" style="font-size:13px;">🚬 흡연</label>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">한줄 소개</label>
+          <input class="form-input" type="text" id="m${i}-intro" style="height:44px;"
+            placeholder="나를 표현하는 한 문장" maxlength="200">
+        </div>
       </div>
+    </div>`;
+  }
+
+  container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
+    <!-- 연락처 섹션 -->
+    <div class="card card-p" style="margin-bottom:12px;">
+      <div style="font-size:14px;font-weight:700;margin-bottom:12px;">
+        📞 연락처 <span style="font-size:12px;color:var(--gray-500);font-weight:400;">(하나 이상 필수)</span>
+      </div>
+      <div class="form-group" style="margin-bottom:8px;">
+        <label class="form-label">카카오 오픈채팅 링크</label>
+        <input class="form-input" type="url" id="kakao-link" style="height:44px;"
+          placeholder="https://open.kakao.com/o/..." maxlength="300" autocomplete="off">
+        <div style="font-size:11px;color:var(--gray-400);margin-top:4px;">https:// 로 시작하는 오픈채팅 URL</div>
+      </div>
+      <div style="text-align:center;font-size:12px;color:var(--gray-400);margin:4px 0;">또는</div>
       <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label">한줄 소개</label>
-        <input class="form-input" type="text" style="height:44px;"
-          placeholder="나를 표현하는 한 문장" maxlength="200">
+        <label class="form-label">연락처 전화번호</label>
+        <input class="form-input" type="tel" id="contact-phone" style="height:44px;"
+          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
+        <div style="font-size:11px;color:var(--gray-400);margin-top:4px;">매칭 성사 시 상대팀에게만 공개됩니다</div>
       </div>
-    </div>`).join('');
+    </div>`;
 })();
+
+// 팀원 2·3번 접기/펼치기 토글
+function toggleMemberCard(i) {
+  const fields = document.getElementById(`member-fields-${i}`);
+  const btn    = document.getElementById(`toggle-btn-${i}`);
+  if (!fields) return;
+  const isOpen = fields.style.display !== 'none';
+  fields.style.display = isOpen ? 'none' : 'block';
+  if (btn) btn.textContent = isOpen ? '＋' : '－';
+  // 접을 때 입력값 초기화 (없애면 서버에 안 보내짐)
+  if (isOpen) {
+    const idEl = document.getElementById(`m${i}-nickname`);
+    if (idEl) idEl.value = '';
+  }
+}
+window.toggleMemberCard = toggleMemberCard;
 
 function handleVerifConfirm(i, el) {
   const status = document.getElementById(`verif-status-${i}`);
@@ -2322,6 +2499,115 @@ window.showTerms = showTerms;
 
 function confirmUnverifiedTeam() { closeModal('team-unverified-confirm'); }
 window.confirmUnverifiedTeam = confirmUnverifiedTeam;
+
+// ============================================================
+// 32. 앱 이용 방법 모달
+// ============================================================
+function showHowToUse() {
+  const modalId = 'modal-how-to-use';
+  let el = document.getElementById(modalId);
+
+  if (!el) {
+    el = document.createElement('div');
+    el.id        = modalId;
+    el.className = 'modal-overlay';
+    el.style.cssText = 'z-index:9999;overflow-y:auto;align-items:flex-start;padding:16px 0;';
+
+    el.innerHTML = `
+      <div class="modal-sheet" style="border-radius:20px;max-width:480px;width:calc(100% - 32px);
+        margin:auto;padding:0;overflow:hidden;">
+
+        <!-- 헤더 -->
+        <div style="background:linear-gradient(135deg,var(--pink),var(--purple));
+          padding:24px 20px 20px;color:white;text-align:center;position:relative;">
+          <button onclick="closeModal('${modalId}')"
+            style="position:absolute;right:16px;top:16px;background:rgba(255,255,255,0.2);
+              border:none;color:white;width:30px;height:30px;border-radius:50%;
+              font-size:16px;cursor:pointer;line-height:1;">✕</button>
+          <div style="font-size:28px;margin-bottom:8px;">🌸</div>
+          <div style="font-size:20px;font-weight:800;margin-bottom:4px;">춘천 과팅 이용 방법</div>
+          <div style="font-size:13px;opacity:0.85;">5분이면 준비 완료!</div>
+        </div>
+
+        <!-- 스텝 목록 -->
+        <div style="padding:20px 16px;background:white;">
+
+          ${howToStep('1', '🙋', '회원 가입',
+            '아이디·비밀번호·학과 등 기본 정보를 입력하고 학생증 사진을 업로드해요.',
+            ['현재 재학 중인 학생만 가입 가능', '만 19세 이상만 이용 가능'])}
+
+          ${howToStep('2', '💳', '이용료 입금',
+            `남성 ${(cfg.FEE_MALE||3000).toLocaleString()}원 / 여성 ${(cfg.FEE_FEMALE||1000).toLocaleString()}원을 아래 계좌로 입금해요.`,
+            [`${esc(cfg.BANK_NAME)} ${esc(cfg.BANK_ACCOUNT)} (${esc(cfg.BANK_HOLDER)})`,
+             '입금자명을 앱에 정확히 기재해주세요'])}
+
+          ${howToStep('3', '✅', '관리자 승인',
+            '학생증 인증과 입금이 확인되면 관리자가 계정을 활성화해요.',
+            ['보통 수 시간~1 영업일 이내 처리', '결과는 앱 내 알림으로 안내됩니다'])}
+
+          ${howToStep('4', '👥', '팀 등록',
+            '활성화 후 팀 탭에서 팀을 등록해요. 혼자도 가능하고 최대 3명까지 팀을 꾸릴 수 있어요.',
+            ['팀원은 모두 인증·입금 완료 회원이어야 해요',
+             '카카오 오픈채팅 링크 또는 전화번호를 입력해두면 매칭 시 연락이 가능해요'])}
+
+          ${howToStep('5', '💌', '과팅 신청',
+            '홈에서 마음에 드는 남성 팀을 골라 신청해요. (여성 팀이 남성 팀에게 신청)',
+            ['한 팀에 중복 신청은 안 돼요', '신청 내역은 신청 탭에서 확인 가능'])}
+
+          ${howToStep('6', '🎉', '매칭 성사!',
+            '관리자가 양팀을 매칭하면 연락처가 공개돼요. 즐거운 과팅 되세요!',
+            ['매칭 후 취소·환불은 불가', '문의: ' + esc(cfg.ADMIN_EMAIL||'')])}
+
+          <!-- 유의사항 -->
+          <div style="background:#FFF8E1;border:1px solid #FFE082;border-radius:12px;
+            padding:14px 16px;margin-top:4px;">
+            <div style="font-size:13px;font-weight:700;color:#795548;margin-bottom:8px;">⚠️ 유의사항</div>
+            <ul style="margin:0;padding-left:16px;font-size:12px;color:#795548;line-height:1.8;">
+              <li>허위 정보 기재 시 즉시 이용 제한됩니다</li>
+              <li>상대방을 배려하는 매너 있는 과팅 문화를 만들어요</li>
+              <li>불건전한 언행·성희롱은 영구 제재 대상입니다</li>
+              <li>환불은 서비스 이용 전에만 가능합니다</li>
+            </ul>
+          </div>
+
+          <button class="btn btn-primary" style="width:100%;margin-top:16px;height:50px;font-size:16px;"
+            onclick="closeModal('${modalId}')">이해했어요! 시작하기 🌸</button>
+        </div>
+      </div>`;
+
+    el.addEventListener('click', e => {
+      if (e.target === el) el.classList.remove('show');
+    });
+    document.body.appendChild(el);
+  }
+
+  el.scrollTop = 0;
+  el.classList.add('show');
+}
+window.showHowToUse = showHowToUse;
+
+// 이용 방법 스텝 카드 렌더 헬퍼
+function howToStep(num, emoji, title, desc, bullets = []) {
+  return `
+  <div style="display:flex;gap:12px;margin-bottom:20px;align-items:flex-start;">
+    <div style="min-width:36px;height:36px;border-radius:50%;
+      background:linear-gradient(135deg,var(--pink),var(--purple));
+      color:white;display:flex;align-items:center;justify-content:center;
+      font-size:13px;font-weight:800;">${esc(num)}</div>
+    <div style="flex:1;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">
+        ${emoji} ${esc(title)}
+      </div>
+      <div style="font-size:13px;color:var(--gray-600);line-height:1.5;margin-bottom:${bullets.length?'6px':'0'};">
+        ${esc(desc)}
+      </div>
+      ${bullets.length ? `
+      <ul style="margin:0;padding-left:16px;font-size:12px;color:var(--gray-500);line-height:1.8;">
+        ${bullets.map(b => `<li>${esc(b)}</li>`).join('')}
+      </ul>` : ''}
+    </div>
+  </div>`;
+}
 
 // ============================================================
 // 31. 앱 시작
