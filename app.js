@@ -770,8 +770,9 @@ async function goToVerification() {
   if (!university || university === '')  { showToast('대학교를 선택해주세요'); return; }
   if (!department || department.length < 2){ showToast('학과를 입력해주세요'); return; }
   if (!studentNum || studentNum.length < 6){ showToast('학번을 입력해주세요'); return; }
+  // 2007년생(만 19세) 허용 — 대학 신입생 기준 완화
   if (!birthYear || birthYear < 1980 || birthYear > new Date().getFullYear() - 17) {
-    showToast('만 18세 이상만 가입할 수 있습니다'); return;
+    showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
   if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
@@ -961,13 +962,26 @@ async function submitVerification() {
         profile_active:  false
       };
       // phone_number 컬럼이 DB에 추가된 경우에만 포함
-      // Supabase SQL Editor에서 아래 실행 후 활성화됨:
-      // ALTER TABLE users ADD COLUMN phone_number TEXT;
       if (d.phone_number) insertPayload.phone_number = d.phone_number;
-      // custom_badge 컬럼이 DB에 있는 경우 포함
+      // custom_badge 컬럼이 DB에 있는 경우에만 포함 (없으면 무시)
       if (d.custom_badge) insertPayload.custom_badge = d.custom_badge;
 
-      const { data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single();
+      let newP, profileErr;
+      ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+
+      // ★ 컬럼 없음(PGRST204) 또는 schema cache 오류 → 선택 컬럼 제거 후 재시도
+      const isMissingCol = (e) =>
+        e?.code === 'PGRST204' ||
+        e?.message?.includes('schema cache') ||
+        e?.message?.includes('Could not find');
+
+      if (profileErr && isMissingCol(profileErr)) {
+        console.warn('[SV] 선택 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
+        // custom_badge, phone_number 제거 후 재시도
+        delete insertPayload.custom_badge;
+        delete insertPayload.phone_number;
+        ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+      }
 
       if (profileErr) {
         if (profileErr.code === '23505') {
@@ -988,12 +1002,15 @@ async function submitVerification() {
         } else if (profileErr.code === '42501') {
           throw new Error('RLS 권한 오류: Supabase → SQL Editor에서 users 테이블 INSERT 정책을 확인하세요. (auth.uid() = auth_id 조건 필요)');
         } else if (profileErr.code === '23514') {
-          // 체크 제약 위반 — birth_year 범위 초과가 가장 흔한 원인
+          // birth_year 체크 제약 위반 → 제약 해제 SQL 안내
           throw new Error(
-            '입력 값이 DB 제약 조건을 위반했습니다.\n' +
-            '생년월일이 허용 범위를 벗어났을 수 있습니다.\n' +
-            '(Supabase SQL Editor: ALTER TABLE users DROP CONSTRAINT users_birth_year_check; 실행 후 재시도)'
+            `출생연도(${d.birth_year})가 DB 제약 조건에 걸렸습니다.\n` +
+            'Supabase SQL Editor에서 아래 SQL을 실행해주세요:\n' +
+            'ALTER TABLE users DROP CONSTRAINT IF EXISTS users_birth_year_check;'
           );
+        } else if (isMissingCol(profileErr)) {
+          // 재시도 후에도 컬럼 오류 → 핵심 컬럼만으로 3차 시도
+          throw new Error(`프로필 저장 실패 (컬럼 없음): ${profileErr.message}\nSupabase 스키마 캐시를 새로고침 해주세요.`);
         } else {
           throw new Error(`프로필 저장 실패 [${profileErr.code}]: ${profileErr.message}`);
         }
@@ -1850,9 +1867,17 @@ async function saveCustomBadge() {
       .from('users')
       .update({ custom_badge: badge })
       .eq('id', profile.id);
-    if (error) throw error;
+
+    if (error) {
+      // custom_badge 컬럼이 DB에 없는 경우 안내
+      if (error.code === 'PGRST204' || error.message?.includes('custom_badge') || error.message?.includes('schema cache')) {
+        showToast('⚠️ DB에 custom_badge 컬럼이 없습니다. SQL Editor에서: ALTER TABLE users ADD COLUMN custom_badge TEXT;');
+        return;
+      }
+      throw error;
+    }
     state.profile.custom_badge = badge;
-    showToast(badge ? `✅ 뱃지가 저장되었습니다: ${badge}` : '뱃지가 삭제되었습니다');
+    showToast(badge ? `✅ 뱃지 저장: ${badge}` : '뱃지가 삭제되었습니다');
   } catch(err) {
     showToast('❌ 저장 실패: ' + err.message);
   }
