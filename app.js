@@ -2606,9 +2606,72 @@ async function saveCustomBadge() {
 window.saveCustomBadge = saveCustomBadge;
 
 // ============================================================
-// 27. 신고
+// 내 팀 등록 취소 (마이페이지)
 // ============================================================
-function showReport()    { document.getElementById('modal-report')?.classList.add('show'); }
+async function confirmDeleteMyTeam() {
+  const profile = state.profile;
+  if (!profile) { showToast('로그인이 필요합니다'); return; }
+
+  // 내 팀 조회
+  const { data: myTeam } = await _sb
+    .from('teams')
+    .select('id, title, status')
+    .eq('leader_id', profile.id)
+    .single();
+
+  if (!myTeam) {
+    showToast('등록된 팀이 없습니다');
+    return;
+  }
+
+  if (myTeam.status === 'matched') {
+    showToast('❌ 매칭 완료된 팀은 삭제할 수 없습니다. 관리자에게 문의해주세요.');
+    return;
+  }
+
+  if (!confirm(`"${myTeam.title}" 팀을 삭제하시겠습니까?\n팀원 정보와 신청 내역이 모두 삭제됩니다.`)) return;
+
+  await deleteMyTeam(myTeam.id);
+}
+window.confirmDeleteMyTeam = confirmDeleteMyTeam;
+
+async function deleteMyTeam(teamId) {
+  const ignore = async (p) => { try { await p; } catch(e) { console.warn('[deleteTeam]', e.message); } };
+
+  try {
+    // FK 순서대로 삭제
+    await ignore(_sb.from('match_requests').delete().eq('male_team_id',   teamId));
+    await ignore(_sb.from('match_requests').delete().eq('female_team_id', teamId));
+    await ignore(_sb.from('team_members').delete().eq('team_id', teamId));
+
+    const { error } = await _sb.from('teams').delete().eq('id', teamId);
+    if (error) throw new Error('팀 삭제 실패 (RLS): ' + error.message);
+
+    showToast('✅ 팀 등록이 취소되었습니다');
+    await loadTeams();
+    updateHomeStats();
+  } catch(err) {
+    showToast('❌ ' + err.message);
+  }
+}
+window.deleteMyTeam = deleteMyTeam;
+
+// ============================================================
+// 신고 안내 (준비중)
+// ============================================================
+function showReportNotice() {
+  document.getElementById('modal-report')?.classList.add('show');
+}
+window.showReportNotice = showReportNotice;
+
+function copyReportEmail() {
+  const email = 'john_1217@naver.com';
+  navigator.clipboard?.writeText(email)
+    .then(() => showToast('✅ 이메일 주소가 복사되었습니다!'))
+    .catch(() => showToast('이메일: ' + email));
+}
+window.copyReportEmail = copyReportEmail;
+function showReport() { showReportNotice(); }
 function showWithdraw()  { document.getElementById('modal-withdraw')?.classList.add('show'); }
 window.showReport   = showReport;
 window.showWithdraw = showWithdraw;
