@@ -1595,6 +1595,13 @@ async function registerTeam() {
     showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
   }
 
+  // ── 팀 PIN (4자리 숫자 필수)
+  const teamPinRaw = document.getElementById('team-pin')?.value.trim();
+  if (!teamPinRaw || !/^\d{4}$/.test(teamPinRaw)) {
+    showToast('팀 PIN은 숫자 4자리로 입력해주세요 (예: 1234)'); return;
+  }
+  const teamPin = teamPinRaw;
+
   // ── 인증 여부: profile_active + 학생증 승인 여부로 판단
   //   is_verified = true → 홈 목록 상단 노출 혜택
   const isVerified = !!profile.profile_active;
@@ -1618,6 +1625,7 @@ async function registerTeam() {
       status:        'recruiting',
       contact_phone: phoneNum  || null,
       contact_kakao: kakaoId   || null,
+      team_pin:      teamPin,
       is_verified:   isVerified
     }).select().single());
 
@@ -1630,11 +1638,12 @@ async function registerTeam() {
         university:    profile.university,
         status:        'recruiting',
         contact_phone: phoneNum || null,
-        contact_kakao: kakaoId  || null
+        contact_kakao: kakaoId  || null,
+        team_pin:      teamPin
       }).select().single());
     }
 
-    // 시도 3: contact_kakao도 제외
+    // 시도 3: contact_kakao 제외
     if (teamErr && isMissingCol(teamErr)) {
       ({ data: team, error: teamErr } = await _sb.from('teams').insert({
         leader_id:     profile.id,
@@ -1642,11 +1651,24 @@ async function registerTeam() {
         title,
         university:    profile.university,
         status:        'recruiting',
+        contact_phone: phoneNum || null,
+        team_pin:      teamPin
+      }).select().single());
+    }
+
+    // 시도 4: team_pin도 제외 (컬럼 없는 구버전 DB)
+    if (teamErr && isMissingCol(teamErr)) {
+      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+        leader_id:  profile.id,
+        gender:     profile.gender,
+        title,
+        university: profile.university,
+        status:     'recruiting',
         contact_phone: phoneNum || null
       }).select().single());
     }
 
-    // 시도 4: contact_phone도 제외
+    // 시도 5: contact_phone도 제외
     if (teamErr && isMissingCol(teamErr)) {
       ({ data: team, error: teamErr } = await _sb.from('teams').insert({
         leader_id:  profile.id,
@@ -1663,7 +1685,7 @@ async function registerTeam() {
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
     if (memberErr) throw new Error('팀원 등록 실패: ' + memberErr.message);
 
-    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)`);
+    showToast(`🎉 팀이 등록되었습니다! PIN: ${teamPin} (메모해두세요)`);
     await loadTeams();
     showScreen('screen-home');
   } catch(err) {
@@ -2683,6 +2705,8 @@ async function renderAdminDashboard() {
       _sb.from('reports').select('*', { count:'exact', head:true }).eq('status', 'pending'),
       // 확정된 입금 합계
       _sb.from('deposits').select('amount').eq('status', 'confirmed'),
+      // 후기 승인 대기
+      _sb.from('reviews').select('*', { count:'exact', head:true }).eq('status', 'pending'),
     ]);
 
     const safeCount = (r, idx) => {
@@ -2700,6 +2724,7 @@ async function renderAdminDashboard() {
     const femaleTeams    = safeCount(results[6], 6);
     const matched        = safeCount(results[7], 7);
     const reports        = safeCount(results[8], 8);
+    const pendingReviews = safeCount(results[10], 10);
 
     // 누적 입금액 계산
     let totalDeposit = 0;
@@ -2754,6 +2779,7 @@ async function renderAdminDashboard() {
         ${adminStat('활성 남성팀',   maleTeams,  '', "switchAdminTab('teams',null)")}
         ${adminStat('활성 여성팀',   femaleTeams,'', "switchAdminTab('teams',null)")}
         ${adminStat('신고 접수',     reports,    '', "switchAdminTab('reports',null)", reports>0?'var(--error)':'')}
+        ${adminStat('후기 대기',     pendingReviews, pendingReviews>0?'✏️':'', "switchAdminTab('reviews',null)", pendingReviews>0?'var(--warning)':'')}
       </div>
 
       <div style="padding:0 16px 16px;">
@@ -2763,6 +2789,7 @@ async function renderAdminDashboard() {
           <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('verif',null)">🎓 인증 (${pendingVerif})</button>
           <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('deposit',null)">💳 입금 (${pendingDeposit})</button>
           <button class="btn btn-danger btn-sm"    style="flex:1;min-width:90px;" onclick="switchAdminTab('reports',null)">🚨 신고 (${reports})</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('reviews',null)">✏️ 후기 (${pendingReviews})</button>
         </div>
       </div>`;
   } catch(err) {
@@ -2974,6 +3001,128 @@ async function switchAdminTab(tab, el) {
                 </div>` : ''}
             </div>`).join('')}
       </div>`;
+    return;
+  }
+
+  // ── 후기 관리
+  if (tab === 'reviews') {
+    const { data: reviews, error: revErr } = await _sb
+      .from('reviews')
+      .select('*, users!reviews_user_id_fkey(nickname,username)')
+      .order('created_at', { ascending: false });
+
+    if (revErr) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <div class="empty-title">후기 조회 실패</div>
+          <div class="empty-desc">${esc(revErr.message)}<br><br>
+            reviews 테이블이 없다면 아래 SQL을 실행하세요:<br>
+            <code style="font-size:11px;background:#f5f5f5;padding:4px 8px;border-radius:4px;display:block;margin-top:8px;text-align:left;word-break:break-all;">
+              CREATE TABLE IF NOT EXISTS reviews (
+                id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+                user_id uuid REFERENCES users(id),
+                team_name text, emoji text DEFAULT '🌸',
+                rating int DEFAULT 5, comment text NOT NULL,
+                status text DEFAULT 'pending',
+                created_at timestamptz DEFAULT now()
+              );
+            </code>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const pending  = (reviews||[]).filter(r => r.status === 'pending');
+    const approved = (reviews||[]).filter(r => r.status === 'approved');
+    const rejected = (reviews||[]).filter(r => r.status === 'rejected');
+
+    const STATUS_CHIP = {
+      pending:  'chip-orange',
+      approved: 'chip-green',
+      rejected: 'chip-red'
+    };
+    const STATUS_LABEL = {
+      pending:  '⏳ 대기',
+      approved: '✅ 승인',
+      rejected: '❌ 반려'
+    };
+
+    const renderReview = (r) => `
+      <div class="admin-list-item">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+          <div>
+            <div style="font-size:14px;font-weight:700;">
+              ${esc(r.emoji||'🌸')} ${esc(r.team_name||'익명')}
+              <span style="font-size:12px;color:var(--gray-500);font-weight:400;">
+                · @${esc(r.users?.username||'-')}
+              </span>
+            </div>
+            <div style="margin-top:4px;">
+              ${'⭐'.repeat(Math.min(r.rating||5, 5))}
+              <span style="font-size:11px;color:var(--gray-400);margin-left:6px;">
+                ${new Date(r.created_at).toLocaleDateString('ko-KR')}
+              </span>
+            </div>
+          </div>
+          <span class="chip ${STATUS_CHIP[r.status]||'chip-gray'}" style="flex-shrink:0;">
+            ${STATUS_LABEL[r.status]||r.status}
+          </span>
+        </div>
+        <p style="font-size:13px;color:var(--gray-700);line-height:1.6;
+          background:var(--gray-50);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:10px;">
+          "${esc(r.comment)}"
+        </p>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${r.status !== 'approved' ? `
+            <button class="btn btn-primary btn-sm"
+              onclick="adminApproveReview('${esc(r.id)}')">✅ 승인</button>` : ''}
+          ${r.status !== 'rejected' ? `
+            <button class="btn btn-danger btn-sm"
+              onclick="adminRejectReview('${esc(r.id)}')">❌ 반려</button>` : ''}
+          <button class="btn btn-outline btn-sm"
+            onclick="adminDeleteReview('${esc(r.id)}')">🗑️ 삭제</button>
+        </div>
+      </div>`;
+
+    container.innerHTML = `
+      <div style="padding:12px 16px 4px;font-size:14px;font-weight:700;">
+        ✏️ 후기 관리
+        <span style="font-size:12px;font-weight:400;color:var(--gray-500);margin-left:8px;">
+          대기 ${pending.length} · 승인 ${approved.length} · 반려 ${rejected.length}
+        </span>
+      </div>
+
+      ${pending.length > 0 ? `
+        <div style="padding:8px 16px 4px;font-size:12px;font-weight:700;color:var(--warning);">
+          ⏳ 승인 대기 (${pending.length}건)
+        </div>
+        <div class="menu-list" style="margin-bottom:8px;">
+          ${pending.map(renderReview).join('')}
+        </div>` : ''}
+
+      ${approved.length > 0 ? `
+        <div style="padding:8px 16px 4px;font-size:12px;font-weight:700;color:var(--success);">
+          ✅ 승인된 후기 (${approved.length}건)
+        </div>
+        <div class="menu-list" style="margin-bottom:8px;">
+          ${approved.map(renderReview).join('')}
+        </div>` : ''}
+
+      ${rejected.length > 0 ? `
+        <div style="padding:8px 16px 4px;font-size:12px;font-weight:700;color:var(--error);">
+          ❌ 반려된 후기 (${rejected.length}건)
+        </div>
+        <div class="menu-list">
+          ${rejected.map(renderReview).join('')}
+        </div>` : ''}
+
+      ${(reviews||[]).length === 0 ? `
+        <div class="empty-state">
+          <div class="empty-icon">✏️</div>
+          <div class="empty-title">후기가 없습니다</div>
+          <div class="empty-desc">사용자가 후기를 작성하면 여기에 표시됩니다</div>
+        </div>` : ''}`;
     return;
   }
 
@@ -3278,7 +3427,55 @@ async function adminUnbanUser(userId) {
 }
 window.adminUnbanUser = adminUnbanUser;
 
-// 회원 완전 삭제 (관리자)
+// ============================================================
+// 후기 관리 (승인 / 반려 / 삭제)
+// ============================================================
+async function adminApproveReview(reviewId) {
+  try { assertAdmin(); } catch { return; }
+  if (!/^[0-9a-f-]{36}$/i.test(reviewId)) return;
+  try {
+    const { error } = await _sb.from('reviews')
+      .update({ status: 'approved' }).eq('id', reviewId);
+    if (error) throw error;
+    showToast('✅ 후기가 승인되었습니다. 후기 탭에 게시됩니다.');
+    switchAdminTab('reviews', null);
+  } catch(err) {
+    showToast('❌ 승인 실패: ' + err.message);
+  }
+}
+window.adminApproveReview = adminApproveReview;
+
+async function adminRejectReview(reviewId) {
+  try { assertAdmin(); } catch { return; }
+  if (!/^[0-9a-f-]{36}$/i.test(reviewId)) return;
+  if (!confirm('이 후기를 반려하시겠습니까?')) return;
+  try {
+    const { error } = await _sb.from('reviews')
+      .update({ status: 'rejected' }).eq('id', reviewId);
+    if (error) throw error;
+    showToast('후기가 반려되었습니다');
+    switchAdminTab('reviews', null);
+  } catch(err) {
+    showToast('❌ 반려 실패: ' + err.message);
+  }
+}
+window.adminRejectReview = adminRejectReview;
+
+async function adminDeleteReview(reviewId) {
+  try { assertAdmin(); } catch { return; }
+  if (!/^[0-9a-f-]{36}$/i.test(reviewId)) return;
+  if (!confirm('이 후기를 완전히 삭제하시겠습니까?')) return;
+  try {
+    const { error } = await _sb.from('reviews')
+      .delete().eq('id', reviewId);
+    if (error) throw error;
+    showToast('🗑️ 후기가 삭제되었습니다');
+    switchAdminTab('reviews', null);
+  } catch(err) {
+    showToast('❌ 삭제 실패: ' + err.message);
+  }
+}
+window.adminDeleteReview = adminDeleteReview;
 async function adminDeleteUser(userId) {
   try { assertAdmin(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
@@ -3613,21 +3810,30 @@ window.toggleAll = toggleAll;
   }
 
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
-    <!-- 연락처 섹션 -->
+    <!-- 연락처 + PIN 섹션 -->
     <div class="card card-p" style="margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처 & 팀 PIN</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 필수입니다.
+        연락처는 매칭 성사 시 상대팀에게만 공개됩니다. PIN은 나중에 팀을 불러올 때 사용합니다.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
         <label class="form-label">전화번호</label>
         <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
           placeholder="010-0000-0000" maxlength="15" autocomplete="off">
       </div>
-      <div class="form-group" style="margin-bottom:0;">
+      <div class="form-group" style="margin-bottom:10px;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
         <input class="form-input" type="text" id="contact-kakao" style="height:48px;"
           placeholder="카카오톡 아이디 입력" maxlength="50" autocomplete="off">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label">팀 PIN <span class="required">*</span>
+          <span style="font-size:11px;color:var(--gray-400);font-weight:400;"> — 숫자 4자리, 팀 불러오기에 사용</span>
+        </label>
+        <input class="form-input" type="number" id="team-pin"
+          style="height:48px;font-size:20px;letter-spacing:8px;font-weight:700;"
+          placeholder="0000" maxlength="4" min="0" max="9999" autocomplete="off">
+        <p class="form-hint">⚠️ PIN을 잊으면 팀을 불러올 수 없습니다. 메모해두세요!</p>
       </div>
     </div>
 
