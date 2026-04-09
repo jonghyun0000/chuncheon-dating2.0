@@ -1605,35 +1605,111 @@ window.registerTeam = registerTeam;
 // ============================================================
 // 23. 과팅 신청
 // ============================================================
-// 신청 화면 팀원 2·3번 접기/펼치기
-function toggleApplyMember(i) {
-  const fields  = document.getElementById(`apply-fields-${i}`);
-  const btn     = document.getElementById(`apply-toggle-${i}`);
-  if (!fields) return;
-  const isOpen  = fields.style.display !== 'none';
-  fields.style.display = isOpen ? 'none' : 'block';
-  if (btn) btn.textContent = isOpen ? '＋' : '－';
-  // 접을 때 입력값 초기화
-  if (isOpen) {
-    const nick = document.getElementById(`apply-m${i}-nickname`);
-    if (nick) nick.value = '';
+// 23. 과팅 신청 — 등록된 팀 정보 그대로 사용
+// ============================================================
+
+// 신청 화면 열기: 내 팀 정보를 DB에서 조회해 미리보기로 표시
+async function openApplyScreen(teamId) {
+  if (!state.profile) { showAuthGateModal('apply'); return; }
+
+  window._applyTargetTeamId = teamId;
+
+  // 대상팀 이름 표시
+  const targetTeam = _cachedTeams.find(t => t.id === teamId);
+  const nameEl = document.getElementById('apply-target-team-name');
+  if (nameEl) nameEl.textContent = targetTeam?.title || '—';
+
+  // 신청 완료 버튼 일단 숨김
+  const submitBtn = document.getElementById('btn-submit-apply');
+  const noBanner  = document.getElementById('apply-no-team-banner');
+  const preview   = document.getElementById('apply-my-team-preview');
+  if (submitBtn) submitBtn.style.display = 'none';
+  if (noBanner)  noBanner.style.display  = 'none';
+  if (preview)   preview.innerHTML = '<div style="text-align:center;padding:24px;"><div class="spinner"></div></div>';
+
+  showScreen('screen-apply');
+
+  try {
+    // 내 팀 + 팀원 조회
+    const { data: myTeam, error } = await _sb.from('teams')
+      .select('*, team_members(*)')
+      .eq('leader_id', state.profile.id)
+      .single();
+
+    if (error || !myTeam) {
+      // 팀 없음 → 안내 배너 표시
+      if (preview)  preview.innerHTML = '';
+      if (noBanner) noBanner.style.display = 'block';
+      return;
+    }
+
+    // 내 팀 미리보기 렌더
+    const members = myTeam.team_members || [];
+    const EMOJIS_APPLY = ['🙋','🙋‍♀️','👤'];
+    if (preview) {
+      preview.innerHTML = `
+        <div class="card" style="overflow:hidden;margin-bottom:4px;">
+          <div style="background:linear-gradient(135deg,var(--pink),var(--purple));
+            padding:12px 16px;color:white;">
+            <div style="font-size:15px;font-weight:700;">${esc(myTeam.title)}</div>
+            <div style="font-size:12px;opacity:0.85;margin-top:2px;">
+              ${esc(myTeam.university)} · 팀원 ${members.length}명
+            </div>
+          </div>
+          <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px;">
+            ${members.length === 0
+              ? `<p style="font-size:13px;color:var(--gray-400);text-align:center;padding:8px 0;">
+                  팀원 정보가 없습니다. 팀등록에서 팀원을 추가해주세요.</p>`
+              : members.map((m, i) => `
+                <div style="display:flex;align-items:center;gap:10px;
+                  background:var(--gray-50);border-radius:var(--radius-sm);padding:10px 12px;">
+                  <div style="font-size:22px;">${EMOJIS_APPLY[i] || '👤'}</div>
+                  <div style="flex:1;">
+                    <div style="font-size:13px;font-weight:700;">
+                      ${esc(m.nickname)} · ${esc(String(m.age))}세
+                      ${m.is_leader ? '<span class="chip chip-pink" style="font-size:10px;padding:2px 6px;margin-left:4px;">팀장</span>' : ''}
+                    </div>
+                    <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;">
+                      <span style="font-size:11px;color:var(--gray-500);">${esc(m.department || '')}</span>
+                      ${m.mbti ? `<span class="chip chip-purple" style="font-size:10px;padding:2px 6px;">${esc(m.mbti)}</span>` : ''}
+                      <span style="font-size:10px;" class="chip ${m.smoking ? '' : 'chip-green'}"
+                        style="background:${m.smoking?'#FFF3E0':'#E8F5E9'};color:${m.smoking?'#E65100':'#388E3C'};">
+                        ${m.smoking ? '🚬' : '🚭'}
+                      </span>
+                    </div>
+                    ${m.intro ? `<div style="font-size:11px;color:var(--gray-500);margin-top:3px;">"${esc(m.intro)}"</div>` : ''}
+                  </div>
+                </div>`).join('')
+            }
+          </div>
+        </div>
+        <p style="font-size:11px;color:var(--gray-400);text-align:center;margin-bottom:4px;">
+          ✏️ 정보 수정은 <span style="color:var(--pink);cursor:pointer;"
+            onclick="showScreen('screen-team-register')">팀등록 탭</span>에서 할 수 있어요
+        </p>`;
+    }
+
+    // 팀원이 있으면 신청 버튼 표시
+    if (submitBtn) submitBtn.style.display = members.length > 0 ? 'block' : 'none';
+
+  } catch(err) {
+    if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">
+      팀 정보를 불러오지 못했습니다: ${esc(err.message)}</div>`;
   }
 }
-window.toggleApplyMember = toggleApplyMember;
+window.openApplyScreen = openApplyScreen;
 
 async function submitApply() {
   const profile = state.profile;
   if (!profile) { showToast('로그인이 필요합니다'); return; }
-  if (!profile.profile_active) { showToast('서비스 활성화가 필요합니다'); return; }
 
-  // 신청 대상팀 확인 (state에 저장된 targetTeamId 사용)
   const targetTeamId = window._applyTargetTeamId;
   if (!targetTeamId) { showToast('신청 대상팀 정보가 없습니다. 다시 시도해주세요.'); return; }
 
   const targetTeam = _cachedTeams.find(t => t.id === targetTeamId);
   if (!targetTeam) { showToast('대상팀 정보를 찾을 수 없습니다.'); return; }
 
-  // 성별 교차 검증: 남성→여성팀 / 여성→남성팀만 신청 가능
+  // 성별 교차 검증
   if (profile.gender === 'male' && targetTeam.gender !== 'female') {
     showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return;
   }
@@ -1641,111 +1717,67 @@ async function submitApply() {
     showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return;
   }
 
-  // 팀원 1번 필수 검증
-  const m1Nickname = document.getElementById('apply-m1-nickname')?.value.trim();
-  const m1Age      = parseInt(document.getElementById('apply-m1-age')?.value || '0');
-  if (!m1Nickname) { showToast('❌ 팀원 1의 닉네임을 입력해주세요.'); return; }
-  if (!m1Age || m1Age < 19 || m1Age > 60) { showToast('❌ 팀원 1의 나이를 확인해주세요. (19~60세)'); return; }
-
-  // 팀원 1~3 수집
-  const applyMembers = [];
-  applyMembers.push({
-    nickname: m1Nickname, age: m1Age,
-    mbti:    document.getElementById('apply-m1-mbti')?.value || null,
-    smoking: document.querySelector('input[name="apply-smoke1"]:checked')?.id === 'apply-s1',
-    intro:   document.getElementById('apply-m1-intro')?.value.trim() || null,
-    is_leader: true, sort_order: 0
-  });
-  for (let i = 2; i <= 3; i++) {
-    const fields = document.getElementById(`apply-fields-${i}`);
-    if (fields?.style.display === 'none') continue;
-    const nick = document.getElementById(`apply-m${i}-nickname`)?.value.trim();
-    if (!nick) continue;
-    const age = parseInt(document.getElementById(`apply-m${i}-age`)?.value || '0');
-    if (age && (age < 19 || age > 60)) { showToast(`❌ 팀원 ${i}의 나이를 확인해주세요. (19~60세)`); return; }
-    applyMembers.push({
-      nickname: nick, age: age || null,
-      mbti:    document.getElementById(`apply-m${i}-mbti`)?.value || null,
-      smoking: document.querySelector(`input[name="apply-smoke${i}"]:checked`)?.id === `apply-s${i}`,
-      intro:   document.getElementById(`apply-m${i}-intro`)?.value.trim() || null,
-      is_leader: false, sort_order: i - 1
-    });
-  }
-
-  // 내 팀 조회
-  const { data: myTeam } = await _sb.from('teams')
-    .select('id').eq('leader_id', profile.id).single();
-  if (!myTeam) { showToast('❌ 먼저 팀을 등록해주세요.'); return; }
-
-  // 신청 메시지 수집
-  const msgEl = document.getElementById('apply-message');
-  const message = msgEl?.value.trim() || '';
-
+  setBtnLoading('btn-submit-apply', true, '💌 신청 완료');
   try {
-    const insertData = {
-      status: 'pending',
-      message,
-      created_at: new Date().toISOString()
-    };
-    // 성별에 따라 신청자/대상 팀 구분
-    if (profile.gender === 'female') {
-      insertData.female_team_id = myTeam.id;
-      insertData.male_team_id   = targetTeamId;
-    } else {
+    // 내 팀 조회 (ID만)
+    const { data: myTeam, error: teamErr } = await _sb.from('teams')
+      .select('id')
+      .eq('leader_id', profile.id)
+      .single();
+
+    if (teamErr || !myTeam) {
+      showToast('❌ 등록된 팀이 없습니다. 팀 등록 후 신청해주세요.'); return;
+    }
+
+    const message = document.getElementById('apply-message')?.value.trim() || '';
+
+    // match_requests INSERT — 성별 기준으로 male/female_team_id 구분
+    const insertData = { status: 'pending', created_at: new Date().toISOString() };
+    if (message) insertData.message = message;
+
+    if (profile.gender === 'male') {
       insertData.male_team_id   = myTeam.id;
       insertData.female_team_id = targetTeamId;
+    } else {
+      insertData.female_team_id = myTeam.id;
+      insertData.male_team_id   = targetTeamId;
     }
 
     const { error } = await _sb.from('match_requests').insert(insertData);
+
     if (error) {
       if (error.code === '23505') {
         showToast('이미 이 팀에 신청했습니다.'); return;
       }
+      if (error.code === '42501' || error.message?.includes('row-level security')) {
+        throw new Error(
+          'RLS 정책 오류 (match_requests INSERT 권한 없음) — ' +
+          'Supabase SQL Editor에서 아래 SQL을 실행해주세요:\n' +
+          'CREATE POLICY "match_requests_insert" ON match_requests FOR INSERT WITH CHECK (' +
+          'male_team_id IN (SELECT id FROM teams WHERE leader_id IN ' +
+          '(SELECT id FROM users WHERE auth_id = auth.uid())) OR ' +
+          'female_team_id IN (SELECT id FROM teams WHERE leader_id IN ' +
+          '(SELECT id FROM users WHERE auth_id = auth.uid())));'
+        );
+      }
       throw error;
     }
 
-    // 팀원 정보를 team_members에 upsert (기존 팀원 없으면 insert)
-    if (applyMembers.length > 0) {
-      const memberRows = applyMembers.map(m => ({ ...m, team_id: myTeam.id }));
-      // 기존 팀원이 없는 경우에만 insert (오류 무시)
-      await _sb.from('team_members').upsert(memberRows, { onConflict: 'team_id,sort_order', ignoreDuplicates: false })
-        .then(({ error: mErr }) => {
-          if (mErr) console.warn('[submitApply] team_members upsert 실패(무시):', mErr.message);
-        });
-    }
+    // 신청 메시지 초기화
+    const msgEl = document.getElementById('apply-message');
+    if (msgEl) msgEl.value = '';
 
     showToast('💌 과팅 신청이 완료되었습니다!');
     showScreen('screen-requests');
     loadAndRenderRequests('sent');
+
   } catch(err) {
-    showToast('❌ 신청 오류: ' + err.message);
+    showToast('❌ 신청 오류 (RLS 또는 DB): ' + err.message, 6000);
+  } finally {
+    setBtnLoading('btn-submit-apply', false, '💌 신청 완료');
   }
 }
 window.submitApply = submitApply;
-
-// 신청 화면 열기 (팀 ID 저장 후 이동)
-function openApplyScreen(teamId) {
-  if (!state.profile) { showAuthGateModal('apply'); return; }
-  window._applyTargetTeamId = teamId;
-
-  const team = _cachedTeams.find(t => t.id === teamId);
-  if (team) {
-    // 신청 대상팀 이름 표시
-    const nameEl = document.getElementById('apply-target-team-name');
-    if (nameEl) nameEl.textContent = team.title;
-
-    // 팀원 입력폼 초기화 (본인 정보 자동 채우기)
-    const p = state.profile;
-    const ageEl  = document.getElementById('apply-m1-age');
-    const mbtiEl = document.getElementById('apply-m1-mbti');
-    const introEl= document.getElementById('apply-m1-intro');
-    if (ageEl  && p.birth_year) ageEl.value = new Date().getFullYear() - p.birth_year + 1;
-    if (mbtiEl && p.mbti)       mbtiEl.value = p.mbti;
-    if (introEl && p.bio)       introEl.value = p.bio;
-  }
-  showScreen('screen-apply');
-}
-window.openApplyScreen = openApplyScreen;
 
 // ============================================================
 // 24. 신청 내역
