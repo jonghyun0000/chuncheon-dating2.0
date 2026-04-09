@@ -631,17 +631,28 @@ window.enterGuestBrowse = enterGuestBrowse;
 // ============================================================
 async function updateHomeStats() {
   try {
+    // RLS로 인해 count가 막힐 수 있으므로 data 조회로 대체
     const [teamRes, matchRes, maleRes, femaleRes] = await Promise.allSettled([
-      _sb.from('teams').select('*', { count:'exact', head:true })
+      _sb.from('teams').select('id', { count:'exact', head:true })
         .eq('status','recruiting').eq('is_visible',true),
-      _sb.from('matches').select('*', { count:'exact', head:true }),
-      _sb.from('users').select('*', { count:'exact', head:true })
+      _sb.from('matches').select('id', { count:'exact', head:true }),
+      _sb.from('users').select('id', { count:'exact', head:true })
         .eq('gender','male').is('deleted_at',null),
-      _sb.from('users').select('*', { count:'exact', head:true })
+      _sb.from('users').select('id', { count:'exact', head:true })
         .eq('gender','female').is('deleted_at',null),
     ]);
 
-    const safe = r => (r.status === 'fulfilled' ? (r.value?.count ?? 0) : 0);
+    const safe = r => {
+      if (r.status !== 'fulfilled') return 0;
+      const v = r.value;
+      if (v?.error) return 0;
+      // count 방식
+      if (typeof v?.count === 'number') return v.count;
+      // data 배열 방식 (RLS로 head:true 안 되는 경우)
+      if (Array.isArray(v?.data)) return v.data.length;
+      return 0;
+    };
+
     const tc  = safe(teamRes);
     const mc  = safe(matchRes);
     const mc_ = safe(maleRes);
@@ -650,10 +661,11 @@ async function updateHomeStats() {
     setText('stat-teams',   tc);
     setText('stat-matched', mc);
     setText('stat-members', mc_ + fc);
-    // 남녀 개별 카운트 — ID가 존재하면 표시
     setText('stat-members-male',   mc_);
     setText('stat-members-female', fc);
-  } catch(e) { /* 통계 실패 시 무시 */ }
+  } catch(e) {
+    console.warn('[updateHomeStats]', e);
+  }
 }
 window.updateHomeStats = updateHomeStats;
 
@@ -1126,7 +1138,7 @@ async function submitDeposit() {
       { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' },
       { onConflict: 'user_id' }
     );
-    if (error) throw new Error('입금 신청 저장 실패: ' + error.message);
+    if (error) throw new Error('입금 신청 저장 실패 (RLS 정책 오류 — Supabase SQL Editor에서 deposits 테이블 INSERT 정책을 확인하세요): ' + error.message);
 
     showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
     showScreen('screen-pending');
@@ -1139,7 +1151,7 @@ async function submitDeposit() {
 window.submitDeposit = submitDeposit;
 
 // ============================================================
-// 17. 회원 완전삭제 (deleteAccount) — 연관 데이터 전체 제거 후 Auth 삭제
+// 17. 회원 완전삭제 (deleteAccount) — 연관 데이터 전체 제거
 // ============================================================
 async function deleteAccount() {
   const profile = state.profile;
@@ -1147,104 +1159,72 @@ async function deleteAccount() {
   if (!profile || !authUser) return;
   if (!confirm('정말 탈퇴하시겠습니까?\n모든 데이터가 즉시 삭제되며 복구할 수 없습니다.')) return;
 
-  // 롤백용 스냅샷 (soft-delete 타임스탬프)
-  const deletedAt = new Date().toISOString();
+  const safeDelete = async (table, filter) => {
+    try {
+      let q = _sb.from(table).delete();
+      for (const [col, val] of Object.entries(filter)) {
+        if (Array.isArray(val)) q = q.in(col, val);
+        else                    q = q.eq(col, val);
+      }
+      const { error } = await q;
+      if (error) console.warn(`[deleteAccount] ${table} 삭제 경고:`, error.message);
+    } catch(e) {
+      console.warn(`[deleteAccount] ${table} 삭제 오류:`, e.message);
+    }
+  };
 
   try {
-    // ── STEP 1: soft delete 표시 (선제적으로 재가입 방지)
+    // STEP 1: soft delete (재가입 방지)
     const { error: softErr } = await _sb
       .from('users')
-      .update({ deleted_at: deletedAt, profile_active: false })
+      .update({ deleted_at: new Date().toISOString(), profile_active: false })
       .eq('id', profile.id);
-    if (softErr) throw new Error('탈퇴 처리 실패: ' + softErr.message);
+    if (softErr) throw new Error('탈퇴 처리 실패 (users 업데이트): ' + softErr.message);
 
-    // ── STEP 2: 본인이 팀장인 팀 ID 조회
-    const { data: myTeams } = await _sb
-      .from('teams')
-      .select('id')
-      .eq('leader_id', profile.id);
+    // STEP 2: 내 팀 ID 목록 수집
+    const { data: myTeams } = await _sb.from('teams').select('id').eq('leader_id', profile.id);
     const myTeamIds = (myTeams || []).map(t => t.id);
 
-    // ── STEP 3: 팀원으로 속한 팀 ID 조회
-    const { data: memberTeams } = await _sb
-      .from('team_members')
-      .select('team_id')
-      .eq('nickname', profile.nickname); // nickname 기준 (DB에 user_id 없을 수 있음)
-    const memberTeamIds = (memberTeams || []).map(m => m.team_id);
+    // STEP 3: 외래키 순서대로 삭제 — 자식 테이블 먼저
 
-    // 모든 관련 팀 ID (중복 제거)
-    const allTeamIds = [...new Set([...myTeamIds, ...memberTeamIds])];
+    // 3-1: messages (team_id 또는 sender_id 기준)
+    if (myTeamIds.length > 0) await safeDelete('messages', { team_id: myTeamIds });
+    await safeDelete('messages', { sender_id: profile.id });
 
-    // ── STEP 4: messages 삭제 (관련 팀의 채팅)
-    if (allTeamIds.length > 0) {
-      await _sb.from('messages')
-        .delete()
-        .in('team_id', allTeamIds);
-    }
-    // 본인 auth_id 기반 messages도 삭제
-    await _sb.from('messages')
-      .delete()
-      .eq('sender_id', profile.id);
-
-    // ── STEP 5: match_requests 삭제 (본인 팀이 포함된 요청)
+    // 3-2: match_requests (팀 ID 기준 양방향)
     if (myTeamIds.length > 0) {
-      await _sb.from('match_requests')
-        .delete()
-        .in('male_team_id', myTeamIds);
-      await _sb.from('match_requests')
-        .delete()
-        .in('female_team_id', myTeamIds);
+      await safeDelete('match_requests', { male_team_id: myTeamIds });
+      await safeDelete('match_requests', { female_team_id: myTeamIds });
     }
 
-    // ── STEP 6: team_members 삭제 (본인이 팀장인 팀의 멤버 전체 + 본인이 멤버인 행)
-    if (myTeamIds.length > 0) {
-      await _sb.from('team_members')
-        .delete()
-        .in('team_id', myTeamIds);
-    }
-    // 다른 팀에서 팀원으로 있는 행 삭제 (nickname 기준)
-    await _sb.from('team_members')
-      .delete()
-      .eq('nickname', profile.nickname);
+    // 3-3: team_members (내 팀의 멤버 + 내가 멤버로 있는 다른 팀)
+    if (myTeamIds.length > 0) await safeDelete('team_members', { team_id: myTeamIds });
+    // 내 닉네임으로 다른 팀에 등록된 팀원 행 삭제
+    if (profile.nickname) await safeDelete('team_members', { nickname: profile.nickname });
 
-    // ── STEP 7: teams 삭제 (본인이 팀장인 팀)
-    if (myTeamIds.length > 0) {
-      await _sb.from('teams')
-        .delete()
-        .in('id', myTeamIds);
-    }
+    // 3-4: teams (내가 팀장인 팀)
+    if (myTeamIds.length > 0) await safeDelete('teams', { id: myTeamIds });
 
-    // ── STEP 8: deposits 삭제
-    await _sb.from('deposits')
-      .delete()
-      .eq('user_id', profile.id);
+    // 3-5: deposits, student_verifications
+    await safeDelete('deposits',              { user_id: profile.id });
+    await safeDelete('student_verifications', { user_id: profile.id });
 
-    // ── STEP 9: student_verifications 삭제
-    await _sb.from('student_verifications')
-      .delete()
-      .eq('user_id', profile.id);
+    // 3-6: reports (신고자 기록)
+    await safeDelete('reports', { reporter_id: profile.id });
 
-    // ── STEP 10: users 레코드 완전 삭제
-    const { error: userDelErr } = await _sb
-      .from('users')
-      .delete()
-      .eq('id', profile.id);
+    // STEP 4: users 행 완전 삭제
+    const { error: userDelErr } = await _sb.from('users').delete().eq('id', profile.id);
     if (userDelErr) {
-      // users 삭제 실패 시 soft delete로 유지 (이미 Step 1에서 처리됨)
+      // RLS나 외래키로 인해 실패할 수 있음 — soft delete로 대체 유지
       console.warn('[deleteAccount] users 행 삭제 실패 (soft delete 유지):', userDelErr.message);
     }
 
-    // ── STEP 11: Supabase Auth 계정 삭제
-    // anon key로는 직접 deleteUser 불가 → signOut 후 관리자에게 위임
-    // (service_role key를 Edge Function으로 처리하는 것이 이상적이나,
-    //  현재 구조상 signOut으로 세션 종료하고 Auth 계정은 삭제 표시)
+    // STEP 5: Auth 세션 종료
     await _sb.auth.signOut();
 
-    // ── STEP 12: 로컬 상태 완전 초기화 & 자동 로그아웃
-    state.authUser      = null;
-    state.profile       = null;
-    state.regData       = null;
-    state.uploadedFile  = null;
+    // STEP 6: 로컬 상태 초기화
+    state.authUser = null; state.profile = null;
+    state.regData  = null; state.uploadedFile = null;
     state.screenHistory = [];
 
     closeModal('modal-withdraw');
@@ -1253,20 +1233,18 @@ async function deleteAccount() {
 
   } catch (err) {
     console.error('[deleteAccount]', err);
-    // 롤백: soft delete 취소 (users 복구 시도)
+    // 롤백: soft delete 취소
     try {
       await _sb.from('users')
         .update({ deleted_at: null, profile_active: !!profile.profile_active })
         .eq('id', profile.id);
-    } catch(rollbackErr) {
-      console.error('[deleteAccount] 롤백 실패:', rollbackErr.message);
-    }
-    showToast('❌ 탈퇴 처리 중 오류가 발생했습니다: ' + err.message);
+    } catch(e) { console.error('[deleteAccount] 롤백 실패:', e.message); }
+    showToast('❌ 탈퇴 처리 중 오류 (외래키 또는 RLS): ' + err.message, 5000);
   }
 }
 window.deleteAccount = deleteAccount;
 
-// 하위 호환용 alias (modal-withdraw의 onclick="doWithdraw()" 호출 대응)
+// 하위 호환용 alias
 async function doWithdraw() { await deleteAccount(); }
 window.doWithdraw = doWithdraw;
 
@@ -1392,9 +1370,27 @@ function renderTeamList() {
         </div>
       </div>`).join('');
 
-    const applyBtn = isGuest
-      ? `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showAuthGateModal('apply')">💌 신청하기</button>`
-      : `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showScreen('screen-apply')">💌 신청하기</button>`;
+    // 신청 버튼: 로그인한 남성 회원만 여성팀에 신청 가능 / 여성팀 카드엔 신청 버튼 숨김
+    // team.gender === 'female' → 남성 회원이 신청 대상
+    // team.gender === 'male'   → 여성 회원이 신청 대상 → 신청 버튼 숨김(역할 반대)
+    let applyBtn = '';
+    if (isGuest) {
+      applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showAuthGateModal('apply')">💌 신청하기</button>`;
+    } else if (isMale) {
+      // 남성팀 → 여성이 신청 (현재 로그인 사용자가 여성이면 신청 버튼 표시)
+      if (state.profile?.gender === 'female') {
+        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
+      } else {
+        applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👨 남성팀 (신청 불가)</button>`;
+      }
+    } else {
+      // 여성팀 → 남성이 신청
+      if (state.profile?.gender === 'male') {
+        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
+      } else {
+        applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
+      }
+    }
 
     return `
     <div class="team-card" style="${cardBorder}" onclick="openTeamDetail('${esc(team.id)}')">
@@ -1453,6 +1449,9 @@ async function openTeamDetail(teamId) {
 
   const team = _cachedTeams.find(t => t.id === teamId);
   if (!team) return;
+
+  // 현재 상세보기 팀 ID 저장 (신청 버튼에서 참조)
+  window._currentDetailTeamId = teamId;
 
   // textContent로 안전하게 설정
   setText('detail-title', team.title);
@@ -1606,16 +1605,147 @@ window.registerTeam = registerTeam;
 // ============================================================
 // 23. 과팅 신청
 // ============================================================
+// 신청 화면 팀원 2·3번 접기/펼치기
+function toggleApplyMember(i) {
+  const fields  = document.getElementById(`apply-fields-${i}`);
+  const btn     = document.getElementById(`apply-toggle-${i}`);
+  if (!fields) return;
+  const isOpen  = fields.style.display !== 'none';
+  fields.style.display = isOpen ? 'none' : 'block';
+  if (btn) btn.textContent = isOpen ? '＋' : '－';
+  // 접을 때 입력값 초기화
+  if (isOpen) {
+    const nick = document.getElementById(`apply-m${i}-nickname`);
+    if (nick) nick.value = '';
+  }
+}
+window.toggleApplyMember = toggleApplyMember;
+
 async function submitApply() {
   const profile = state.profile;
   if (!profile) { showToast('로그인이 필요합니다'); return; }
   if (!profile.profile_active) { showToast('서비스 활성화가 필요합니다'); return; }
-  if (profile.gender !== 'female') { showToast('여성 회원만 신청할 수 있습니다'); return; }
-  showToast('💌 과팅 신청이 완료되었습니다!');
-  showScreen('screen-requests');
-  loadAndRenderRequests('sent');
+
+  // 신청 대상팀 확인 (state에 저장된 targetTeamId 사용)
+  const targetTeamId = window._applyTargetTeamId;
+  if (!targetTeamId) { showToast('신청 대상팀 정보가 없습니다. 다시 시도해주세요.'); return; }
+
+  const targetTeam = _cachedTeams.find(t => t.id === targetTeamId);
+  if (!targetTeam) { showToast('대상팀 정보를 찾을 수 없습니다.'); return; }
+
+  // 성별 교차 검증: 남성→여성팀 / 여성→남성팀만 신청 가능
+  if (profile.gender === 'male' && targetTeam.gender !== 'female') {
+    showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return;
+  }
+  if (profile.gender === 'female' && targetTeam.gender !== 'male') {
+    showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return;
+  }
+
+  // 팀원 1번 필수 검증
+  const m1Nickname = document.getElementById('apply-m1-nickname')?.value.trim();
+  const m1Age      = parseInt(document.getElementById('apply-m1-age')?.value || '0');
+  if (!m1Nickname) { showToast('❌ 팀원 1의 닉네임을 입력해주세요.'); return; }
+  if (!m1Age || m1Age < 19 || m1Age > 60) { showToast('❌ 팀원 1의 나이를 확인해주세요. (19~60세)'); return; }
+
+  // 팀원 1~3 수집
+  const applyMembers = [];
+  applyMembers.push({
+    nickname: m1Nickname, age: m1Age,
+    mbti:    document.getElementById('apply-m1-mbti')?.value || null,
+    smoking: document.querySelector('input[name="apply-smoke1"]:checked')?.id === 'apply-s1',
+    intro:   document.getElementById('apply-m1-intro')?.value.trim() || null,
+    is_leader: true, sort_order: 0
+  });
+  for (let i = 2; i <= 3; i++) {
+    const fields = document.getElementById(`apply-fields-${i}`);
+    if (fields?.style.display === 'none') continue;
+    const nick = document.getElementById(`apply-m${i}-nickname`)?.value.trim();
+    if (!nick) continue;
+    const age = parseInt(document.getElementById(`apply-m${i}-age`)?.value || '0');
+    if (age && (age < 19 || age > 60)) { showToast(`❌ 팀원 ${i}의 나이를 확인해주세요. (19~60세)`); return; }
+    applyMembers.push({
+      nickname: nick, age: age || null,
+      mbti:    document.getElementById(`apply-m${i}-mbti`)?.value || null,
+      smoking: document.querySelector(`input[name="apply-smoke${i}"]:checked`)?.id === `apply-s${i}`,
+      intro:   document.getElementById(`apply-m${i}-intro`)?.value.trim() || null,
+      is_leader: false, sort_order: i - 1
+    });
+  }
+
+  // 내 팀 조회
+  const { data: myTeam } = await _sb.from('teams')
+    .select('id').eq('leader_id', profile.id).single();
+  if (!myTeam) { showToast('❌ 먼저 팀을 등록해주세요.'); return; }
+
+  // 신청 메시지 수집
+  const msgEl = document.getElementById('apply-message');
+  const message = msgEl?.value.trim() || '';
+
+  try {
+    const insertData = {
+      status: 'pending',
+      message,
+      created_at: new Date().toISOString()
+    };
+    // 성별에 따라 신청자/대상 팀 구분
+    if (profile.gender === 'female') {
+      insertData.female_team_id = myTeam.id;
+      insertData.male_team_id   = targetTeamId;
+    } else {
+      insertData.male_team_id   = myTeam.id;
+      insertData.female_team_id = targetTeamId;
+    }
+
+    const { error } = await _sb.from('match_requests').insert(insertData);
+    if (error) {
+      if (error.code === '23505') {
+        showToast('이미 이 팀에 신청했습니다.'); return;
+      }
+      throw error;
+    }
+
+    // 팀원 정보를 team_members에 upsert (기존 팀원 없으면 insert)
+    if (applyMembers.length > 0) {
+      const memberRows = applyMembers.map(m => ({ ...m, team_id: myTeam.id }));
+      // 기존 팀원이 없는 경우에만 insert (오류 무시)
+      await _sb.from('team_members').upsert(memberRows, { onConflict: 'team_id,sort_order', ignoreDuplicates: false })
+        .then(({ error: mErr }) => {
+          if (mErr) console.warn('[submitApply] team_members upsert 실패(무시):', mErr.message);
+        });
+    }
+
+    showToast('💌 과팅 신청이 완료되었습니다!');
+    showScreen('screen-requests');
+    loadAndRenderRequests('sent');
+  } catch(err) {
+    showToast('❌ 신청 오류: ' + err.message);
+  }
 }
 window.submitApply = submitApply;
+
+// 신청 화면 열기 (팀 ID 저장 후 이동)
+function openApplyScreen(teamId) {
+  if (!state.profile) { showAuthGateModal('apply'); return; }
+  window._applyTargetTeamId = teamId;
+
+  const team = _cachedTeams.find(t => t.id === teamId);
+  if (team) {
+    // 신청 대상팀 이름 표시
+    const nameEl = document.getElementById('apply-target-team-name');
+    if (nameEl) nameEl.textContent = team.title;
+
+    // 팀원 입력폼 초기화 (본인 정보 자동 채우기)
+    const p = state.profile;
+    const ageEl  = document.getElementById('apply-m1-age');
+    const mbtiEl = document.getElementById('apply-m1-mbti');
+    const introEl= document.getElementById('apply-m1-intro');
+    if (ageEl  && p.birth_year) ageEl.value = new Date().getFullYear() - p.birth_year + 1;
+    if (mbtiEl && p.mbti)       mbtiEl.value = p.mbti;
+    if (introEl && p.bio)       introEl.value = p.bio;
+  }
+  showScreen('screen-apply');
+}
+window.openApplyScreen = openApplyScreen;
 
 // ============================================================
 // 24. 신청 내역
@@ -1650,17 +1780,40 @@ async function loadAndRenderRequests(tab) {
     };
 
     let data, error;
+    const profile = state.profile;
+    const gender  = profile?.gender; // 'male' | 'female'
+
     if (tab === 'sent') {
-      ({ data, error } = await _sb.from('match_requests')
-        .select('*, teams!match_requests_male_team_id_fkey(title,university)')
-        .eq('female_team_id', myTeam.id)
-        .order('created_at', { ascending: false }));
+      // 내가 보낸 신청: 내 팀이 신청자 쪽
+      // 남성 → male_team_id = myTeam.id / 여성 → female_team_id = myTeam.id
+      if (gender === 'male') {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
+      } else {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
+          .eq('female_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
+      }
     } else {
-      ({ data, error } = await _sb.from('match_requests')
-        .select('*, teams!match_requests_female_team_id_fkey(title,university)')
-        .eq('male_team_id', myTeam.id)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false }));
+      // 받은 신청: 내 팀이 수신자 쪽
+      // 남성팀은 female_team_id로 신청받음 → male_team_id = myTeam.id 중 상대가 여성
+      // 여성팀은 male_team_id로 신청받음 → female_team_id = myTeam.id 중 상대가 남성
+      if (gender === 'male') {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false }));
+      } else {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
+          .eq('female_team_id', myTeam.id)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false }));
+      }
     }
 
     if (error) throw error;
@@ -1901,18 +2054,41 @@ async function submitReport() {
   const profile = state.profile;
   if (!profile) { showToast('로그인이 필요합니다'); return; }
 
+  setBtnLoading('btn-submit-report', true, '신고 접수');
   try {
-    const { error } = await _sb.from('reports').insert({
-      reporter_id: profile.id, report_type: type, description: desc, status: 'pending',
-      target_user_id: null // 실제 구현 시 대상 지정
-    });
-    if (error) throw error;
+    // reports 테이블: reporter_id, report_type, description, status 최소 필드로 시도
+    const payload = {
+      reporter_id:  profile.id,
+      report_type:  type,
+      description:  desc,
+      status:       'pending'
+    };
+
+    const { error } = await _sb.from('reports').insert(payload);
+
+    if (error) {
+      // RLS 오류 상세 안내
+      if (error.code === '42501' || error.message?.includes('row-level security')) {
+        throw new Error(
+          'RLS 정책 오류 (신고 테이블 INSERT 권한 없음) — ' +
+          'Supabase SQL Editor에서 아래 SQL을 실행해주세요:\n' +
+          'CREATE POLICY "reports_insert_own" ON reports FOR INSERT WITH CHECK ' +
+          '(reporter_id IN (SELECT id FROM users WHERE auth_id = auth.uid()));'
+        );
+      }
+      throw error;
+    }
+
     closeModal('modal-report');
     showToast('🚨 신고가 접수되었습니다. 검토 후 처리해드릴게요');
-    document.getElementById('report-type').value = '';
-    document.getElementById('report-desc').value = '';
+    const typeEl = document.getElementById('report-type');
+    const descEl = document.getElementById('report-desc');
+    if (typeEl) typeEl.value = '';
+    if (descEl) descEl.value = '';
   } catch(err) {
-    showToast('❌ 신고 접수 실패: ' + err.message);
+    showToast('❌ 신고 접수 실패 (권한 오류): ' + err.message, 5000);
+  } finally {
+    setBtnLoading('btn-submit-report', false, '신고 접수');
   }
 }
 window.submitReport = submitReport;
