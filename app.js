@@ -89,7 +89,7 @@ function setBtnLoading(id, loading, originalText) {
 // ============================================================
 const PROTECTED_SCREENS = new Set([
   'screen-team-register','screen-apply','screen-requests',
-  'screen-messages','screen-mypage','screen-match-success'
+  'screen-reviews','screen-mypage','screen-match-success'
 ]);
 const ADMIN_SCREENS = new Set(['screen-admin']);
 
@@ -127,7 +127,7 @@ window.history.back = function () {
 // ============================================================
 const TAB_SCREEN = {
   home: 'screen-home', find: 'screen-team-register',
-  requests: 'screen-requests', messages: 'screen-messages', mypage: 'screen-mypage'
+  requests: 'screen-requests', messages: 'screen-reviews', mypage: 'screen-mypage'
 };
 
 function switchTab(tab) {
@@ -138,7 +138,7 @@ function switchTab(tab) {
   }
   showScreen(TAB_SCREEN[tab]);
   if (tab === 'requests') { loadAndRenderRequests('sent'); updateBadges(); }
-  if (tab === 'messages') { loadChatTeams(); }
+  if (tab === 'messages') { loadReviews(); }
   if (tab === 'home')     { loadTeams(); updateHomeStats(); updateBadges(); }
 }
 window.switchTab = switchTab;
@@ -691,31 +691,24 @@ window.updateBadges = updateBadges;
 async function updateHomeStats() {
   try {
     const results = await Promise.allSettled([
-      // 등록팀 수: teams는 보통 RLS 없이 공개 조회 가능
-      _sb.from('teams')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'recruiting')
-        .eq('is_visible', true),
-      // 매칭 성사 수: teams 중 status=matched (RLS 우회)
-      _sb.from('teams')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'matched'),
-      // 남성 회원 수
-      _sb.from('users')
-        .select('id', { count: 'exact', head: true })
-        .eq('gender', 'male')
-        .is('deleted_at', null),
-      // 여성 회원 수
-      _sb.from('users')
-        .select('id', { count: 'exact', head: true })
-        .eq('gender', 'female')
-        .is('deleted_at', null),
+      // 등록팀 수 — teams는 보통 anon도 접근 가능
+      _sb.from('teams').select('id', { count:'exact', head:true })
+        .eq('status','recruiting').eq('is_visible',true),
+      // 매칭 성사 수 — teams.status = matched
+      _sb.from('teams').select('id', { count:'exact', head:true })
+        .eq('status','matched'),
+      // 남성 회원 — RLS 막힐 수 있으므로 실패해도 OK
+      _sb.from('users').select('id', { count:'exact', head:true })
+        .eq('gender','male').is('deleted_at',null),
+      // 여성 회원
+      _sb.from('users').select('id', { count:'exact', head:true })
+        .eq('gender','female').is('deleted_at',null),
     ]);
 
-    const safe = (r) => {
-      if (r.status !== 'fulfilled') return null; // null = 표시 안 함
+    const safe = r => {
+      if (r.status !== 'fulfilled') return null;
       const v = r.value;
-      if (v?.error) { console.warn('[stats RLS]', v.error.message); return null; }
+      if (v?.error) return null;
       if (typeof v?.count === 'number') return v.count;
       if (Array.isArray(v?.data)) return v.data.length;
       return null;
@@ -726,15 +719,12 @@ async function updateHomeStats() {
     const males   = safe(results[2]);
     const females = safe(results[3]);
 
-    // null이 아닌 값만 업데이트 (RLS로 막힌 항목은 기존값 유지)
     if (teams   !== null) setText('stat-teams',   teams);
     if (matched !== null) setText('stat-matched', matched);
     if (males   !== null && females !== null) setText('stat-members', males + females);
-    if (males   !== null) setText('stat-members-male',   males);
-    if (females !== null) setText('stat-members-female', females);
-  } catch(e) {
-    console.warn('[updateHomeStats]', e.message);
-  }
+    else if (males !== null) setText('stat-members', males);
+    else if (females !== null) setText('stat-members', females);
+  } catch(e) { console.warn('[updateHomeStats]', e.message); }
 }
 window.updateHomeStats = updateHomeStats;
 
@@ -1597,10 +1587,11 @@ async function registerTeam() {
   }
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
-  // ── 전화번호 (필수, 카카오 오픈채팅 제거)
-  const phoneNum = document.getElementById('contact-phone')?.value.trim() || null;
-  if (!phoneNum) { showToast('연락처 전화번호를 입력해주세요'); return; }
-  if (!/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+  // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
+  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
+  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
+  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
+  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
     showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
   }
 
@@ -1620,31 +1611,43 @@ async function registerTeam() {
     // 시도 1: 전체 컬럼
     let team, teamErr;
     ({ data: team, error: teamErr } = await _sb.from('teams').insert({
-      leader_id:    profile.id,
-      gender:       profile.gender,
+      leader_id:     profile.id,
+      gender:        profile.gender,
       title,
-      university:   profile.university,
-      status:       'recruiting',
-      contact_phone: phoneNum,
-      is_verified:  isVerified
+      university:    profile.university,
+      status:        'recruiting',
+      contact_phone: phoneNum  || null,
+      contact_kakao: kakaoId   || null,
+      is_verified:   isVerified
     }).select().single());
 
     // 시도 2: is_verified 제외
     if (teamErr && isMissingCol(teamErr)) {
-      console.warn('[registerTeam] 컬럼 오류, is_verified 제외 재시도:', teamErr.message);
       ({ data: team, error: teamErr } = await _sb.from('teams').insert({
-        leader_id:    profile.id,
-        gender:       profile.gender,
+        leader_id:     profile.id,
+        gender:        profile.gender,
         title,
-        university:   profile.university,
-        status:       'recruiting',
-        contact_phone: phoneNum
+        university:    profile.university,
+        status:        'recruiting',
+        contact_phone: phoneNum || null,
+        contact_kakao: kakaoId  || null
       }).select().single());
     }
 
-    // 시도 3: contact_phone도 제외
+    // 시도 3: contact_kakao도 제외
     if (teamErr && isMissingCol(teamErr)) {
-      console.warn('[registerTeam] 컬럼 오류, contact_phone도 제외 재시도:', teamErr.message);
+      ({ data: team, error: teamErr } = await _sb.from('teams').insert({
+        leader_id:     profile.id,
+        gender:        profile.gender,
+        title,
+        university:    profile.university,
+        status:        'recruiting',
+        contact_phone: phoneNum || null
+      }).select().single());
+    }
+
+    // 시도 4: contact_phone도 제외
+    if (teamErr && isMissingCol(teamErr)) {
       ({ data: team, error: teamErr } = await _sb.from('teams').insert({
         leader_id:  profile.id,
         gender:     profile.gender,
@@ -1670,6 +1673,148 @@ async function registerTeam() {
   }
 }
 window.registerTeam = registerTeam;
+
+// ============================================================
+// 6️⃣ 팀 불러오기 — 팀명 + 4자리 PIN
+// ============================================================
+async function loadTeamByCode() {
+  const titleInput = document.getElementById('load-team-title')?.value.trim();
+  const pinInput   = document.getElementById('load-team-pin')?.value.trim();
+
+  if (!titleInput) { showToast('팀 이름을 입력해주세요'); return; }
+  if (!pinInput || pinInput.length !== 4 || !/^\d{4}$/.test(pinInput)) {
+    showToast('4자리 숫자 PIN을 입력해주세요'); return;
+  }
+
+  setBtnLoading('btn-load-team', true, '팀 불러오기');
+  try {
+    // teams 테이블에서 title + team_pin 일치하는 팀 조회
+    const { data: team, error } = await _sb
+      .from('teams')
+      .select('*, team_members(*)')
+      .eq('title', titleInput)
+      .eq('team_pin', pinInput)
+      .single();
+
+    if (error || !team) {
+      // team_pin 컬럼 없을 수도 있음 → title만으로 조회 후 PIN 없음 안내
+      showToast('❌ 팀을 찾을 수 없습니다. 팀 이름과 PIN을 확인해주세요.');
+      return;
+    }
+
+    // 내 state.profile의 팀으로 임시 연결
+    window._loadedTeam = team;
+    const members = team.team_members || [];
+
+    // 팀 정보 미리보기 표시
+    const previewEl = document.getElementById('load-team-preview');
+    if (previewEl) {
+      previewEl.innerHTML = `
+        <div style="background:#E8F5E9;border:1px solid #A5D6A7;border-radius:var(--radius-sm);padding:14px;margin-top:12px;">
+          <div style="font-size:14px;font-weight:700;color:#2E7D32;margin-bottom:6px;">✅ 팀 불러오기 성공!</div>
+          <div style="font-size:13px;color:#388E3C;">
+            <strong>${esc(team.title)}</strong> · ${esc(team.university)} · 팀원 ${members.length}명
+          </div>
+        </div>`;
+    }
+    showToast(`✅ "${team.title}" 팀을 불러왔습니다!`);
+  } catch(err) {
+    showToast('❌ 팀 불러오기 실패: ' + err.message);
+  } finally {
+    setBtnLoading('btn-load-team', false, '팀 불러오기');
+  }
+}
+window.loadTeamByCode = loadTeamByCode;
+
+// ============================================================
+// 4️⃣ 과팅 후기 시스템
+// ============================================================
+async function loadReviews() {
+  const container = document.getElementById('reviews-list');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:24px;"><div class="spinner"></div></div>';
+
+  try {
+    // 승인된 후기만 표시
+    const { data: reviews, error } = await _sb
+      .from('reviews')
+      .select('*')
+      .eq('status', 'approved')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      // reviews 테이블 없는 경우
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">💬</div>
+          <div class="empty-title">후기를 불러올 수 없습니다</div>
+          <div class="empty-desc">SQL Editor에서 reviews 테이블을 생성해주세요</div>
+        </div>`;
+      return;
+    }
+
+    if (!reviews || reviews.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">🌸</div>
+          <div class="empty-title">아직 후기가 없어요</div>
+          <div class="empty-desc">매칭 성사 후 첫 후기를 남겨보세요!</div>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = reviews.map(r => `
+      <div class="card card-p" style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="font-size:24px;">${r.emoji || '🌸'}</div>
+          <div>
+            <div style="font-size:13px;font-weight:700;">${esc(r.team_name || '익명팀')}</div>
+            <div style="font-size:11px;color:var(--gray-400);">
+              ${new Date(r.created_at).toLocaleDateString('ko-KR')}
+            </div>
+          </div>
+          <div style="margin-left:auto;">
+            ${'⭐'.repeat(Math.min(r.rating || 5, 5))}
+          </div>
+        </div>
+        <p style="font-size:14px;color:var(--gray-700);line-height:1.6;">"${esc(r.comment)}"</p>
+      </div>`).join('');
+  } catch(e) {
+    container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div>
+      <div class="empty-title">오류: ${esc(e.message)}</div></div>`;
+  }
+}
+window.loadReviews = loadReviews;
+
+async function submitReview() {
+  const profile = state.profile;
+  if (!profile) { showToast('로그인이 필요합니다'); return; }
+
+  const emoji   = document.getElementById('review-emoji')?.value || '🌸';
+  const rating  = parseInt(document.getElementById('review-rating')?.value || '5');
+  const comment = document.getElementById('review-comment')?.value.trim();
+
+  if (!comment || comment.length < 5) { showToast('후기를 5자 이상 입력해주세요'); return; }
+
+  setBtnLoading('btn-submit-review', true, '후기 제출');
+  try {
+    const { error } = await _sb.from('reviews').insert({
+      user_id:   profile.id,
+      team_name: profile.nickname + '팀',
+      emoji, rating, comment,
+      status: 'pending' // 관리자 승인 후 게시
+    });
+    if (error) throw error;
+    closeModal('modal-review-write');
+    showToast('✅ 후기가 제출되었습니다! 관리자 승인 후 게시됩니다');
+    document.getElementById('review-comment').value = '';
+  } catch(err) {
+    showToast('❌ 후기 제출 실패: ' + err.message);
+  } finally {
+    setBtnLoading('btn-submit-review', false, '후기 제출');
+  }
+}
+window.submitReview = submitReview;
 
 // ============================================================
 // 23. 과팅 신청
@@ -1956,9 +2101,13 @@ async function loadAndRenderRequests(tab) {
                <button class="btn btn-outline btn-sm" style="flex:1;"
                 onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`
             : ''}
-          ${!isMatched && !isPendingRecv
+          ${r.status === 'pending' && tab === 'sent'
+            ? `<button class="btn btn-danger btn-sm" style="flex:1;"
+                onclick="cancelApply('${esc(r.id)}')">🚫 신청 취소</button>`
+            : ''}
+          ${!isMatched && !isPendingRecv && !(r.status === 'pending' && tab === 'sent')
             ? `<button class="btn btn-outline btn-sm"
-                onclick="showScreen('screen-messages')">💬 채팅</button>`
+                onclick="switchTab('messages')">💬 채팅</button>`
             : ''}
         </div>
       </div>`;
@@ -1996,8 +2145,11 @@ async function showMatchSuccess(requestId, preloadedData) {
   if (preloadedData) {
     setText('match-success-team-name', preloadedData.teamName || '상대팀');
     const phoneEl = document.getElementById('match-contact-phone');
-    if (phoneEl) phoneEl.textContent = preloadedData.phone || '연락처 미등록';
+    if (phoneEl) phoneEl.textContent = preloadedData.phone || '미등록';
+    const kakaoEl = document.getElementById('match-contact-kakao');
+    if (kakaoEl) kakaoEl.textContent = preloadedData.kakao || '미등록';
     window._matchContactPhone = preloadedData.phone || '';
+    window._matchContactKakao = preloadedData.kakao || '';
     window._matchContactName  = preloadedData.teamName || '상대팀';
     return;
   }
@@ -2056,15 +2208,18 @@ window.showMatchSuccess = showMatchSuccess;
 async function _fetchAndShowOpponentTeam(opponentTeamId) {
   const { data: oppTeam } = await _sb
     .from('teams')
-    .select('title, contact_phone')
+    .select('title, contact_phone, contact_kakao')
     .eq('id', opponentTeamId)
     .single();
 
   if (oppTeam) {
     setText('match-success-team-name', oppTeam.title || '상대팀');
     const phoneEl = document.getElementById('match-contact-phone');
-    if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '연락처 미등록';
+    if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '미등록';
+    const kakaoEl = document.getElementById('match-contact-kakao');
+    if (kakaoEl) kakaoEl.textContent = oppTeam.contact_kakao || '미등록';
     window._matchContactPhone = oppTeam.contact_phone || '';
+    window._matchContactKakao = oppTeam.contact_kakao || '';
     window._matchContactName  = oppTeam.title || '상대팀';
   }
 }
@@ -2072,21 +2227,27 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
 // 연락처 저장 (vCard 다운로드)
 function saveMatchContact() {
   const phone = (window._matchContactPhone || '').trim();
+  const kakao = (window._matchContactKakao || '').trim();
   const name  = (window._matchContactName  || '상대팀').trim();
-  if (!phone) { showToast('저장할 연락처가 없습니다.'); return; }
+  if (!phone && !kakao) { showToast('저장할 연락처가 없습니다.'); return; }
 
-  // vCard 형식으로 생성
-  const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${name} (춘천과팅)\nTEL;TYPE=CELL:${phone}\nEND:VCARD`;
-  const blob = new Blob([vcard], { type: 'text/vcard' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `${name}_춘천과팅.vcf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast('✅ 연락처가 저장되었습니다!');
+  if (phone) {
+    // vCard 형식으로 생성
+    const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${name} (춘천과팅)\nTEL;TYPE=CELL:${phone}${kakao ? `\nNOTE:카카오ID: ${kakao}` : ''}\nEND:VCARD`;
+    const blob = new Blob([vcard], { type: 'text/vcard' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `${name}_춘천과팅.vcf`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    showToast('✅ 연락처가 저장되었습니다!');
+  }
+  if (kakao) {
+    // 카카오 ID 클립보드 복사
+    navigator.clipboard?.writeText(kakao).then(() => {
+      if (!phone) showToast(`✅ 카카오 ID "${kakao}" 복사됨!`);
+    }).catch(() => {});
+  }
 }
 window.saveMatchContact = saveMatchContact;
 
@@ -2119,16 +2280,16 @@ async function acceptMatchRequest(requestId) {
         : reqBefore.male_team_id;
     }
 
-    // 상대팀 연락처 미리 조회
+    // 상대팀 연락처 미리 조회 (contact_kakao 포함)
     let preloaded = null;
     if (opponentTeamId) {
       const { data: oppTeam } = await _sb
         .from('teams')
-        .select('title, contact_phone')
+        .select('title, contact_phone, contact_kakao')
         .eq('id', opponentTeamId)
         .single();
       if (oppTeam) {
-        preloaded = { teamName: oppTeam.title, phone: oppTeam.contact_phone };
+        preloaded = { teamName: oppTeam.title, phone: oppTeam.contact_phone, kakao: oppTeam.contact_kakao };
       }
     }
 
@@ -2164,6 +2325,22 @@ async function rejectMatchRequest(requestId) {
   }
 }
 window.rejectMatchRequest = rejectMatchRequest;
+
+// 과팅 신청 취소 (보낸 신청 취소)
+async function cancelApply(requestId) {
+  if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
+  if (!confirm('신청을 취소하시겠습니까?')) return;
+  try {
+    const { error } = await _sb.from('match_requests')
+      .delete().eq('id', requestId);
+    if (error) throw error;
+    showToast('신청이 취소되었습니다');
+    loadAndRenderRequests('sent');
+  } catch(err) {
+    showToast('❌ 취소 실패: ' + err.message);
+  }
+}
+window.cancelApply = cancelApply;
 
 // ============================================================
 // 25. 메시지 — 상대팀 선택 + 고정 메시지
@@ -2419,35 +2596,32 @@ async function submitReport() {
   const desc = document.getElementById('report-desc')?.value.trim();
   if (!type) { showToast('신고 유형을 선택해주세요'); return; }
   if (!desc || desc.length < 5) { showToast('신고 내용을 5자 이상 입력해주세요'); return; }
-
   const profile = state.profile;
   if (!profile) { showToast('로그인이 필요합니다'); return; }
 
   setBtnLoading('btn-submit-report', true, '신고 접수');
   try {
-    // reports 테이블: reporter_id, report_type, description, status 최소 필드로 시도
-    const payload = {
-      reporter_id:  profile.id,
-      report_type:  type,
-      description:  desc,
-      status:       'pending'
-    };
-
-    const { error } = await _sb.from('reports').insert(payload);
-
+    // target_user_id 없이 최소 필드로 INSERT (컬럼 없으면 오류 방지)
+    const { error } = await _sb.from('reports').insert({
+      reporter_id: profile.id,
+      report_type: type,
+      description: desc,
+      status:      'pending'
+    });
     if (error) {
-      // RLS 오류 상세 안내
       if (error.code === '42501' || error.message?.includes('row-level security')) {
-        throw new Error(
-          'RLS 정책 오류 (신고 테이블 INSERT 권한 없음) — ' +
-          'Supabase SQL Editor에서 아래 SQL을 실행해주세요:\n' +
-          'CREATE POLICY "reports_insert_own" ON reports FOR INSERT WITH CHECK ' +
-          '(reporter_id IN (SELECT id FROM users WHERE auth_id = auth.uid()));'
-        );
+        throw new Error('신고 권한 없음 (RLS) — Supabase SQL Editor에서:\n' +
+          'CREATE POLICY "reports_insert_own" ON reports FOR INSERT WITH CHECK\n' +
+          '(reporter_id IN (SELECT id FROM users WHERE auth_id = auth.uid()));');
       }
-      throw error;
+      // 컬럼 오류면 더 줄여서 재시도
+      if (error.code === 'PGRST204' || error.message?.includes('schema cache')) {
+        const { error: e2 } = await _sb.from('reports').insert({
+          reporter_id: profile.id, description: desc, status: 'pending'
+        });
+        if (e2) throw e2;
+      } else { throw error; }
     }
-
     closeModal('modal-report');
     showToast('🚨 신고가 접수되었습니다. 검토 후 처리해드릴게요');
     const typeEl = document.getElementById('report-type');
@@ -2455,7 +2629,7 @@ async function submitReport() {
     if (typeEl) typeEl.value = '';
     if (descEl) descEl.value = '';
   } catch(err) {
-    showToast('❌ 신고 접수 실패 (권한 오류): ' + err.message, 5000);
+    showToast('❌ 신고 접수 실패: ' + err.message, 5000);
   } finally {
     setBtnLoading('btn-submit-report', false, '신고 접수');
   }
@@ -3104,43 +3278,44 @@ async function adminUnbanUser(userId) {
 }
 window.adminUnbanUser = adminUnbanUser;
 
-// 회원 완전 삭제 (soft-delete 된 경우도 포함 영구 삭제)
+// 회원 완전 삭제 (관리자)
 async function adminDeleteUser(userId) {
   try { assertAdmin(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
   if (!confirm('⚠️ 이 회원을 완전히 삭제하시겠습니까?\n\n' +
-    '• 회원 데이터, 팀, 입금 내역이 모두 삭제됩니다\n' +
+    '• 회원 데이터, 팀, 신청내역, 입금 내역이 모두 삭제됩니다\n' +
     '• 이 작업은 되돌릴 수 없습니다')) return;
 
+  const ignore = async (promise) => { try { await promise; } catch(e) { console.warn('[adminDelete]', e.message); } };
+
   try {
-    // 관련 데이터 순서대로 삭제 (FK cascade 없을 경우 대비)
-    await _sb.from('student_verifications').delete().eq('user_id', userId);
-    await _sb.from('deposits').delete().eq('user_id', userId);
-    await _sb.from('terms_consents').delete().eq('user_id', userId);
-
-    // 팀 삭제 (리더인 팀)
+    // 1. 팀 목록 먼저 수집
     const { data: myTeams } = await _sb.from('teams').select('id').eq('leader_id', userId);
-    if (myTeams?.length) {
-      const teamIds = myTeams.map(t => t.id);
-      await _sb.from('team_members').delete().in('team_id', teamIds);
-      await _sb.from('teams').delete().in('id', teamIds);
+    const teamIds = (myTeams || []).map(t => t.id);
+
+    // 2. 자식 테이블 순서대로 삭제 (FK 제약 대응)
+    if (teamIds.length) {
+      await ignore(_sb.from('match_requests').delete().in('male_team_id', teamIds));
+      await ignore(_sb.from('match_requests').delete().in('female_team_id', teamIds));
+      await ignore(_sb.from('team_members').delete().in('team_id', teamIds));
+      await ignore(_sb.from('teams').delete().in('id', teamIds));
     }
-    // 팀원으로 속한 경우도 삭제 (실패해도 계속)
-    await _sb.from('team_members').delete().eq('user_id', userId);
+    await ignore(_sb.from('student_verifications').delete().eq('user_id', userId));
+    await ignore(_sb.from('deposits').delete().eq('user_id', userId));
+    await ignore(_sb.from('terms_consents').delete().eq('user_id', userId));
+    await ignore(_sb.from('reports').delete().eq('reporter_id', userId));
+    await ignore(_sb.from('reviews').delete().eq('user_id', userId));
 
-    // 신고 기록 삭제 (실패해도 계속)
-    await _sb.from('reports').delete().eq('reporter_id', userId);
-
-    // users 삭제
+    // 3. users 삭제
     const { error: delErr } = await _sb.from('users').delete().eq('id', userId);
-    if (delErr) throw new Error('회원 삭제 실패: ' + delErr.message);
+    if (delErr) throw new Error('회원 삭제 실패 (RLS 또는 FK): ' + delErr.message);
 
     await writeAdminLog('user_delete', 'users', userId);
     closeModal('modal-admin-user');
     showToast('🗑️ 회원이 삭제되었습니다');
     switchAdminTab('users', null);
   } catch(err) {
-    showToast('❌ ' + err.message);
+    showToast('❌ 삭제 오류: ' + err.message, 5000);
   }
 }
 window.adminDeleteUser = adminDeleteUser;
@@ -3438,17 +3613,45 @@ window.toggleAll = toggleAll;
   }
 
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
-    <!-- 연락처 섹션 — 전화번호만 -->
+    <!-- 연락처 섹션 -->
     <div class="card card-p" style="margin-bottom:12px;">
       <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다
+        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 필수입니다.
       </div>
-      <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label">전화번호 <span class="required">*</span></label>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">전화번호</label>
         <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
           placeholder="010-0000-0000" maxlength="15" autocomplete="off">
       </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
+        <input class="form-input" type="text" id="contact-kakao" style="height:48px;"
+          placeholder="카카오톡 아이디 입력" maxlength="50" autocomplete="off">
+      </div>
+    </div>
+
+    <!-- 팀 불러오기 섹션 -->
+    <div class="card card-p" style="margin-bottom:12px;background:var(--gray-50);">
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">🔑 기존 팀 불러오기</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
+        이전에 등록한 팀이 있다면 팀 이름과 PIN으로 불러올 수 있어요.
+      </div>
+      <div class="form-group" style="margin-bottom:8px;">
+        <label class="form-label">팀 이름</label>
+        <input class="form-input" type="text" id="load-team-title" style="height:44px;"
+          placeholder="등록한 팀 이름 입력" maxlength="100">
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">PIN 4자리</label>
+        <input class="form-input" type="number" id="load-team-pin" style="height:44px;"
+          placeholder="0000" maxlength="4" max="9999" min="0">
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-load-team"
+        onclick="loadTeamByCode()" style="width:100%;height:44px;">
+        🔑 팀 불러오기
+      </button>
+      <div id="load-team-preview"></div>
     </div>
 
     <!-- 인증 안내 배너 -->
