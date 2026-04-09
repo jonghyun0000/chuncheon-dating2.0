@@ -1417,7 +1417,7 @@
       </button>
       <button class="tab-item" onclick="switchTab('messages')">
         <span class="tab-icon">💬</span>
-        <span class="tab-label">메시지</span>
+        <span class="tab-label">후기</span>
       </button>
       <button class="tab-item" onclick="switchTab('mypage')">
         <span class="tab-icon">👤</span>
@@ -1561,71 +1561,33 @@
     <div class="tab-bar">
       <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
       <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
-      <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">메시지</span></button>
+      <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
       <button class="tab-item" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
     </div>
   </div>
 
   <!-- ───── MESSAGES ───── -->
-  <div class="screen" id="screen-messages">
+  <!-- ───── 과팅 후기 ───── -->
+  <div class="screen" id="screen-reviews">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-home')">←</button>
-      <span class="header-title">💬 매칭 채팅</span>
-      <span class="header-action" onclick="showReport()">신고</span>
+      <div class="header-logo">🌸 과팅 후기</div>
+      <button class="btn btn-primary btn-sm" style="width:auto;padding:0 14px;height:36px;font-size:13px;"
+        onclick="document.getElementById('modal-review-write')?.classList.add('show')">✏️ 후기 쓰기</button>
     </div>
-
-    <!-- 상대팀 선택 드롭다운 -->
-    <div style="padding:10px 16px;background:white;border-bottom:1px solid var(--gray-100);flex-shrink:0;">
-      <select id="chat-team-select" class="form-select" style="height:44px;font-size:14px;"
-        onchange="switchChatTeam(this.value)">
-        <option value="">💌 신청한 팀을 선택하세요</option>
-      </select>
-    </div>
-
-    <div style="background:#FFFDE7;padding:8px 16px;font-size:12px;color:#795548;
-      display:flex;align-items:center;gap:6px;border-bottom:1px solid #FFF176;flex-shrink:0;">
-      <span>⚠️</span>
-      <span>매칭 성사 전 전화번호 등 개인정보 공유 금지</span>
-    </div>
-
-    <!-- 채팅 메시지 영역 -->
-    <div class="scroll-content" id="chat-messages"
-      style="padding:16px;display:flex;flex-direction:column;gap:4px;background:#FFF8FB;">
-    </div>
-
-    <!-- 고정 메시지 버튼 -->
-    <div style="padding:10px 12px;border-top:1px solid var(--gray-100);background:white;flex-shrink:0;">
-      <p style="font-size:11px;color:var(--gray-400);margin-bottom:8px;text-align:center;">
-        💬 빠른 메시지 선택
-      </p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
-        <button class="btn btn-secondary btn-sm" style="font-size:12px;height:36px;"
-          onclick="sendFixedMessage('안녕하세요! 반갑습니다 😊')">안녕하세요! 반갑습니다 😊</button>
-        <button class="btn btn-secondary btn-sm" style="font-size:12px;height:36px;"
-          onclick="sendFixedMessage('과팅 기대돼요! 잘 부탁드려요 🌸')">과팅 기대돼요! 🌸</button>
-        <button class="btn btn-secondary btn-sm" style="font-size:12px;height:36px;"
-          onclick="sendFixedMessage('어디서 만날까요? 📍')">어디서 만날까요? 📍</button>
-        <button class="btn btn-secondary btn-sm" style="font-size:12px;height:36px;"
-          onclick="sendFixedMessage('언제 시간 되세요? 📅')">언제 시간 되세요? 📅</button>
-        <button class="btn btn-secondary btn-sm" style="font-size:12px;height:36px;"
-          onclick="sendFixedMessage('즐거운 과팅 되길 바라요 🎉')">즐거운 과팅 되길 🎉</button>
-        <button class="btn btn-secondary btn-sm" style="font-size:12px;height:36px;"
-          onclick="sendFixedMessage('잠시 후에 연락드릴게요 🙏')">잠시 후 연락드릴게요 🙏</button>
+    <div class="scroll-content" style="padding:16px;">
+      <div class="info-box" style="margin-bottom:16px;">
+        <span class="info-box-icon">💡</span>
+        <span>매칭이 성사된 팀의 과팅 후기를 확인해보세요! 관리자 승인 후 게시됩니다.</span>
       </div>
-      <div style="display:flex;gap:6px;">
-        <input class="form-input" id="chat-input" type="text"
-          placeholder="직접 입력..." style="flex:1;height:40px;font-size:13px;"
-          maxlength="200" onkeydown="if(event.key==='Enter')sendMessage()">
-        <button class="btn btn-primary btn-sm" style="width:54px;min-width:54px;height:40px;"
-          onclick="sendMessage()">전송</button>
+      <div id="reviews-list">
+        <div style="text-align:center;padding:40px;"><div class="spinner"></div></div>
       </div>
     </div>
-
     <div class="tab-bar">
       <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
       <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
       <button class="tab-item" onclick="switchTab('requests')"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
-      <button class="tab-item active" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">메시지</span></button>
+      <button class="tab-item active" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
       <button class="tab-item" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
     </div>
   </div>
@@ -1645,13 +1607,20 @@
           <strong id="match-success-team-name" style="color:var(--pink);">상대팀</strong>과의<br>만남이 확정되었습니다 🌸
         </p>
 
-        <!-- 전화번호 연결 -->
+        <!-- 전화번호 + 카카오 연결 -->
         <div class="card card-p" style="margin-bottom:20px;text-align:left;">
           <p style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:12px;">📞 상대팀 연락처</p>
-          <div style="background:#F1F8E9;border:1px solid #A5D6A7;border-radius:var(--radius-sm);padding:14px;margin-bottom:12px;">
-            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">전화번호</p>
+          <div style="background:#F1F8E9;border:1px solid #A5D6A7;border-radius:var(--radius-sm);padding:14px;margin-bottom:10px;">
+            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">📱 전화번호</p>
             <p id="match-contact-phone"
               style="font-size:20px;font-weight:700;color:#1B5E20;letter-spacing:0.05em;">
+              —
+            </p>
+          </div>
+          <div style="background:#FFF8E1;border:1px solid #FFE082;border-radius:var(--radius-sm);padding:14px;margin-bottom:12px;">
+            <p style="font-size:12px;color:#F57F17;margin-bottom:6px;font-weight:600;">💛 카카오톡 ID</p>
+            <p id="match-contact-kakao"
+              style="font-size:18px;font-weight:700;color:#E65100;letter-spacing:0.03em;">
               —
             </p>
           </div>
@@ -1832,7 +1801,7 @@
       <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
       <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
       <button class="tab-item" onclick="switchTab('requests')"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
-      <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">메시지</span></button>
+      <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
       <button class="tab-item active" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
     </div>
   </div>
@@ -2101,7 +2070,51 @@
     </div>
   </div>
 
+  <!-- ───── REVIEW WRITE MODAL ───── -->
+  <div class="modal-overlay" id="modal-review-write">
+    <div class="modal-sheet" style="max-height:85dvh;overflow-y:auto;">
+      <div class="modal-handle"></div>
+      <div class="modal-title">✏️ 과팅 후기 작성</div>
+      <div class="info-box" style="margin-bottom:16px;">
+        <span class="info-box-icon">📌</span>
+        <span>후기는 관리자 승인 후 게시됩니다. 허위 후기는 제재될 수 있습니다.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">분위기 이모지</label>
+        <select class="form-select" id="review-emoji">
+          <option value="🌸">🌸 너무 좋았어요</option>
+          <option value="🎉">🎉 최고였어요!</option>
+          <option value="😊">😊 즐거웠어요</option>
+          <option value="💕">💕 설레었어요</option>
+          <option value="😅">😅 어색했지만 괜찮았어요</option>
+          <option value="🙃">🙃 그냥 그랬어요</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">별점</label>
+        <select class="form-select" id="review-rating">
+          <option value="5">⭐⭐⭐⭐⭐ 5점 — 완벽해요!</option>
+          <option value="4">⭐⭐⭐⭐ 4점 — 좋았어요</option>
+          <option value="3">⭐⭐⭐ 3점 — 보통이에요</option>
+          <option value="2">⭐⭐ 2점 — 아쉬웠어요</option>
+          <option value="1">⭐ 1점 — 별로였어요</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">후기 내용 <span class="required">*</span></label>
+        <textarea class="form-textarea" id="review-comment" style="min-height:100px;"
+          placeholder="과팅은 어땠나요? 솔직한 후기를 남겨주세요 (최대 300자)" maxlength="300"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-outline" style="flex:1;"
+          onclick="closeModal('modal-review-write')">취소</button>
+        <button class="btn btn-primary" id="btn-submit-review" style="flex:1;"
+          onclick="submitReview()">후기 제출</button>
+      </div>
+    </div>
   </div>
+
+  </div><!-- #app end -->
   <div id="toast" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ③ 메인 앱 스크립트 -->
