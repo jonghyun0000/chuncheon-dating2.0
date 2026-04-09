@@ -1431,7 +1431,7 @@
     <div class="header">
       <button class="btn-back" onclick="showScreen('screen-home')">←</button>
       <span class="header-title">팀 프로필</span>
-      <span class="header-action" onclick="showReport()">신고</span>
+      <span class="header-action" onclick="showReportNotice()">신고</span>
     </div>
     <div class="scroll-content" style="padding:0 0 24px;">
       <!-- Team Header -->
@@ -1639,7 +1639,7 @@
           <button class="btn btn-outline" style="flex:1;"
             onclick="showScreen('screen-requests')">← 신청 내역으로</button>
           <button class="btn btn-danger btn-sm" style="width:auto;padding:0 16px;"
-            onclick="showReport()">🚨 신고</button>
+            onclick="showReportNotice()">🚨 신고</button>
         </div>
       </div>
     </div>
@@ -1731,6 +1731,13 @@
           <span class="menu-text">팀 등록/수정</span>
           <span class="menu-arrow">›</span>
         </div>
+        <!-- 내 팀 삭제 -->
+        <div class="menu-item" onclick="confirmDeleteMyTeam()"
+          style="background:#FFF5F5;">
+          <span class="menu-icon">🗑️</span>
+          <span class="menu-text" style="color:var(--error);">내 팀 등록 취소</span>
+          <span class="menu-arrow" style="color:var(--error);">›</span>
+        </div>
         <div class="menu-item" onclick="showScreen('screen-deposit')">
           <span class="menu-icon">💳</span>
           <span class="menu-text">입금 안내</span>
@@ -1743,9 +1750,10 @@
           <span class="menu-value chip chip-green">승인</span>
           <span class="menu-arrow">›</span>
         </div>
-        <div class="menu-item" onclick="showReport()">
+        <div class="menu-item" onclick="showReportNotice()">
           <span class="menu-icon">🚨</span>
           <span class="menu-text">신고하기</span>
+          <span class="chip chip-orange" style="font-size:10px;padding:2px 8px;">준비중</span>
           <span class="menu-arrow">›</span>
         </div>
 
@@ -1899,33 +1907,33 @@
     </div>
   </div>
 
-  <!-- ───── REPORT MODAL ───── -->
+  <!-- ───── REPORT MODAL (준비중) ───── -->
   <div class="modal-overlay" id="modal-report">
     <div class="modal-sheet">
       <div class="modal-handle"></div>
-      <div class="modal-title">🚨 신고하기</div>
-      <div class="form-group">
-        <label class="form-label">신고 유형 <span class="required">*</span></label>
-        <select class="form-select" id="report-type">
-          <option value="">신고 유형 선택</option>
-          <option value="fake_profile">허위 프로필</option>
-          <option value="abuse">욕설/비방</option>
-          <option value="harassment">성희롱</option>
-          <option value="spam">스팸</option>
-          <option value="other">기타</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">신고 내용 <span class="required">*</span></label>
-        <textarea class="form-textarea" id="report-desc" placeholder="신고 이유를 구체적으로 적어주세요"></textarea>
-      </div>
-      <div class="info-box" style="margin-bottom:16px;">
-        <span class="info-box-icon">ℹ️</span>
-        <span>허위 신고 시 서비스 이용이 제한될 수 있습니다. 신고 내용은 관리자만 확인합니다.</span>
-      </div>
-      <div style="display:flex;gap:10px;">
-        <button class="btn btn-outline" style="flex:1;" onclick="closeModal('modal-report')">취소</button>
-        <button class="btn btn-danger" id="btn-submit-report" style="flex:1;" onclick="submitReport()">신고 접수</button>
+      <div style="text-align:center;padding:8px 0 24px;">
+        <div style="font-size:48px;margin-bottom:12px;">🚧</div>
+        <div style="font-size:18px;font-weight:700;color:var(--gray-900);margin-bottom:8px;">
+          신고 기능 준비중
+        </div>
+        <p style="font-size:14px;color:var(--gray-500);line-height:1.7;margin-bottom:20px;">
+          현재 앱 내 신고 기능은 준비중입니다.<br>
+          신고 사항은 아래 이메일로 접수해주세요.
+        </p>
+        <div style="background:var(--gray-50);border:1px solid var(--gray-200);
+          border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;text-align:left;">
+          <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px;">신고 접수 이메일</div>
+          <div style="font-size:16px;font-weight:700;color:var(--pink);">john_1217@naver.com</div>
+          <div style="font-size:12px;color:var(--gray-400);margin-top:6px;line-height:1.6;">
+            • 신고 유형 (허위 프로필 / 욕설 / 성희롱 / 기타)<br>
+            • 신고 내용을 상세히 작성해 보내주세요<br>
+            • 영업일 1~3일 이내 처리됩니다
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-bottom:8px;"
+          onclick="copyReportEmail()">📋 이메일 주소 복사</button>
+        <button class="btn btn-outline"
+          onclick="closeModal('modal-report')">닫기</button>
       </div>
     </div>
   </div>
