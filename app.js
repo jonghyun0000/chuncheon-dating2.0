@@ -138,7 +138,7 @@ function switchTab(tab) {
   }
   showScreen(TAB_SCREEN[tab]);
   if (tab === 'requests') { loadAndRenderRequests('sent'); updateBadges(); }
-  if (tab === 'messages') renderMessages();
+  if (tab === 'messages') { loadChatTeams(); }
   if (tab === 'home')     { loadTeams(); updateHomeStats(); updateBadges(); }
 }
 window.switchTab = switchTab;
@@ -690,15 +690,14 @@ window.updateBadges = updateBadges;
 // ============================================================
 async function updateHomeStats() {
   try {
-    // 각 쿼리를 독립적으로 실행 — 하나 실패해도 나머지는 표시
     const results = await Promise.allSettled([
-      // 등록팀 수 (recruiting + visible)
+      // 등록팀 수: teams는 보통 RLS 없이 공개 조회 가능
       _sb.from('teams')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'recruiting')
         .eq('is_visible', true),
-      // 매칭 성사 수 (match_requests status=matched)
-      _sb.from('match_requests')
+      // 매칭 성사 수: teams 중 status=matched (RLS 우회)
+      _sb.from('teams')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'matched'),
       // 남성 회원 수
@@ -714,12 +713,12 @@ async function updateHomeStats() {
     ]);
 
     const safe = (r) => {
-      if (r.status !== 'fulfilled') return 0;
+      if (r.status !== 'fulfilled') return null; // null = 표시 안 함
       const v = r.value;
-      if (v?.error) { console.warn('[stats]', v.error.message); return 0; }
+      if (v?.error) { console.warn('[stats RLS]', v.error.message); return null; }
       if (typeof v?.count === 'number') return v.count;
       if (Array.isArray(v?.data)) return v.data.length;
-      return 0;
+      return null;
     };
 
     const teams   = safe(results[0]);
@@ -727,11 +726,12 @@ async function updateHomeStats() {
     const males   = safe(results[2]);
     const females = safe(results[3]);
 
-    setText('stat-teams',   teams);
-    setText('stat-matched', matched);
-    setText('stat-members', males + females);
-    setText('stat-members-male',   males);
-    setText('stat-members-female', females);
+    // null이 아닌 값만 업데이트 (RLS로 막힌 항목은 기존값 유지)
+    if (teams   !== null) setText('stat-teams',   teams);
+    if (matched !== null) setText('stat-matched', matched);
+    if (males   !== null && females !== null) setText('stat-members', males + females);
+    if (males   !== null) setText('stat-members-male',   males);
+    if (females !== null) setText('stat-members-female', females);
   } catch(e) {
     console.warn('[updateHomeStats]', e.message);
   }
@@ -1988,92 +1988,161 @@ function switchRequestTab(tab) {
 }
 window.switchRequestTab = switchRequestTab;
 
-// 매칭 성사 화면 표시 (전화번호 + 팀 이름 세팅)
-async function showMatchSuccess(requestId) {
-  if (!/^[0-9a-f-]{36}$/i.test(requestId || '')) {
-    showScreen('screen-match-success');
+// 매칭 성사 화면 표시 — 상대팀 정보를 직접 받아 표시
+async function showMatchSuccess(requestId, preloadedData) {
+  showScreen('screen-match-success');
+
+  // preloadedData가 있으면 DB 조회 없이 바로 표시
+  if (preloadedData) {
+    setText('match-success-team-name', preloadedData.teamName || '상대팀');
+    const phoneEl = document.getElementById('match-contact-phone');
+    if (phoneEl) phoneEl.textContent = preloadedData.phone || '연락처 미등록';
+    window._matchContactPhone = preloadedData.phone || '';
+    window._matchContactName  = preloadedData.teamName || '상대팀';
     return;
   }
 
-  showScreen('screen-match-success');
+  // requestId로 조회 (기존 방식 — fallback)
+  if (!requestId || !/^[0-9a-f-]{36}$/i.test(requestId)) return;
 
   try {
     const profile = state.profile;
-    // match_request 조회 → 상대팀 ID 파악
-    const { data: req } = await _sb
+    if (!profile) return;
+
+    // 내 팀 조회
+    const { data: myTeam } = await _sb
+      .from('teams').select('id').eq('leader_id', profile.id).single();
+    if (!myTeam) return;
+
+    // match_requests 조회 — RLS SELECT 정책이 있어야 동작
+    const { data: req, error: reqErr } = await _sb
       .from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId)
       .single();
 
-    if (!req) return;
+    if (reqErr || !req) {
+      // RLS로 조회 안 되는 경우 — matched 상태인 내 팀의 상대팀을 다른 방법으로 찾기
+      // male/female 둘 다 시도
+      const { data: altReq } = await _sb
+        .from('match_requests')
+        .select('male_team_id, female_team_id')
+        .or(`male_team_id.eq.${myTeam.id},female_team_id.eq.${myTeam.id}`)
+        .eq('status', 'matched')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
 
-    // 내 팀이 아닌 쪽 = 상대팀
-    const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', profile.id).single();
+      if (!altReq) { console.warn('[showMatchSuccess] 매칭 정보 조회 실패'); return; }
 
-    const opponentTeamId = myTeam?.id === req.male_team_id
+      const oppId = altReq.male_team_id === myTeam.id
+        ? altReq.female_team_id : altReq.male_team_id;
+      await _fetchAndShowOpponentTeam(oppId);
+      return;
+    }
+
+    const opponentTeamId = myTeam.id === req.male_team_id
       ? req.female_team_id : req.male_team_id;
 
     if (!opponentTeamId) return;
+    await _fetchAndShowOpponentTeam(opponentTeamId);
 
-    // 상대팀 정보 조회
-    const { data: oppTeam } = await _sb
-      .from('teams')
-      .select('title, contact_phone')
-      .eq('id', opponentTeamId)
-      .single();
-
-    if (oppTeam) {
-      setText('match-success-team-name', oppTeam.title || '상대팀');
-      const phoneEl = document.getElementById('match-contact-phone');
-      if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '연락처 미등록';
-      // 전화하기 버튼 데이터
-      window._matchContactPhone = oppTeam.contact_phone || '';
-    }
   } catch(e) {
     console.warn('[showMatchSuccess]', e.message);
   }
 }
 window.showMatchSuccess = showMatchSuccess;
 
-// 전화하기
-function callMatchContact() {
-  const phone = (window._matchContactPhone || '').replace(/[^0-9]/g, '');
-  if (!phone) { showToast('연락처가 없습니다.'); return; }
-  window.location.href = `tel:${phone}`;
+async function _fetchAndShowOpponentTeam(opponentTeamId) {
+  const { data: oppTeam } = await _sb
+    .from('teams')
+    .select('title, contact_phone')
+    .eq('id', opponentTeamId)
+    .single();
+
+  if (oppTeam) {
+    setText('match-success-team-name', oppTeam.title || '상대팀');
+    const phoneEl = document.getElementById('match-contact-phone');
+    if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '연락처 미등록';
+    window._matchContactPhone = oppTeam.contact_phone || '';
+    window._matchContactName  = oppTeam.title || '상대팀';
+  }
 }
-window.callMatchContact = callMatchContact;
+
+// 연락처 저장 (vCard 다운로드)
+function saveMatchContact() {
+  const phone = (window._matchContactPhone || '').trim();
+  const name  = (window._matchContactName  || '상대팀').trim();
+  if (!phone) { showToast('저장할 연락처가 없습니다.'); return; }
+
+  // vCard 형식으로 생성
+  const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${name} (춘천과팅)\nTEL;TYPE=CELL:${phone}\nEND:VCARD`;
+  const blob = new Blob([vcard], { type: 'text/vcard' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `${name}_춘천과팅.vcf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('✅ 연락처가 저장되었습니다!');
+}
+window.saveMatchContact = saveMatchContact;
 
 // 수락
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
+    // match_request에서 상대팀 ID 먼저 파악 (업데이트 전에 읽기)
+    const { data: reqBefore } = await _sb
+      .from('match_requests')
+      .select('male_team_id, female_team_id')
+      .eq('id', requestId)
+      .single();
+
     // match_request 상태 → matched
     const { error: reqErr } = await _sb.from('match_requests').update({
       status: 'matched', responded_at: new Date().toISOString()
     }).eq('id', requestId);
     if (reqErr) throw reqErr;
 
-    // 양쪽 팀 status → matched, is_visible → false (신청 불가)
-    const { data: req } = await _sb
-      .from('match_requests')
-      .select('male_team_id, female_team_id')
-      .eq('id', requestId)
-      .single();
+    // 내 팀 파악
+    const { data: myTeam } = await _sb
+      .from('teams').select('id').eq('leader_id', state.profile?.id).single();
 
-    if (req) {
-      const teamIds = [req.male_team_id, req.female_team_id].filter(Boolean);
-      if (teamIds.length > 0) {
-        await _sb.from('teams')
-          .update({ status: 'matched', is_visible: false })
-          .in('id', teamIds);
+    // 상대팀 ID 결정
+    let opponentTeamId = null;
+    if (reqBefore && myTeam) {
+      opponentTeamId = myTeam.id === reqBefore.male_team_id
+        ? reqBefore.female_team_id
+        : reqBefore.male_team_id;
+    }
+
+    // 상대팀 연락처 미리 조회
+    let preloaded = null;
+    if (opponentTeamId) {
+      const { data: oppTeam } = await _sb
+        .from('teams')
+        .select('title, contact_phone')
+        .eq('id', opponentTeamId)
+        .single();
+      if (oppTeam) {
+        preloaded = { teamName: oppTeam.title, phone: oppTeam.contact_phone };
       }
     }
 
+    // 양쪽 팀 status → matched, is_visible → false
+    const teamIds = [reqBefore?.male_team_id, reqBefore?.female_team_id].filter(Boolean);
+    if (teamIds.length > 0) {
+      await _sb.from('teams')
+        .update({ status: 'matched', is_visible: false })
+        .in('id', teamIds);
+    }
+
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
-    await showMatchSuccess(requestId);
-    // 홈 통계 갱신
+    // 미리 조회한 데이터를 직접 전달 → RLS 우회
+    await showMatchSuccess(requestId, preloaded);
     updateHomeStats();
   } catch(err) {
     showToast('❌ 수락 처리 오류: ' + err.message);
@@ -2097,26 +2166,137 @@ async function rejectMatchRequest(requestId) {
 window.rejectMatchRequest = rejectMatchRequest;
 
 // ============================================================
-// 25. 메시지 — 고정 메시지 버튼 + 직접 입력
+// 25. 메시지 — 상대팀 선택 + 고정 메시지
 // ============================================================
-let _localMessages = [];
+// 팀별 메시지 저장소 { [teamId]: [{mine, text, time}] }
+const _teamMessages = {};
+let _currentChatTeamId = null;
+
+// 메시지 탭 진입 시 신청한 팀 목록 로드
+async function loadChatTeams() {
+  const sel = document.getElementById('chat-team-select');
+  if (!sel) return;
+
+  const profile = state.profile;
+  if (!profile) {
+    sel.innerHTML = '<option value="">로그인이 필요합니다</option>';
+    return;
+  }
+
+  try {
+    // 내 팀 조회
+    const { data: myTeam } = await _sb
+      .from('teams').select('id').eq('leader_id', profile.id).single();
+
+    if (!myTeam) {
+      sel.innerHTML = '<option value="">등록된 팀이 없습니다</option>';
+      renderMessages();
+      return;
+    }
+
+    // 내 팀이 신청한 / 신청받은 match_requests 조회 (sent + received)
+    const col = profile.gender === 'male' ? 'male_team_id' : 'female_team_id';
+    const oppCol = profile.gender === 'male' ? 'female_team_id' : 'male_team_id';
+
+    const { data: reqs } = await _sb
+      .from('match_requests')
+      .select(`id, status, ${oppCol}`)
+      .eq(col, myTeam.id)
+      .in('status', ['pending', 'matched'])
+      .order('created_at', { ascending: false });
+
+    if (!reqs || reqs.length === 0) {
+      sel.innerHTML = '<option value="">신청/수신한 팀이 없습니다</option>';
+      renderMessages();
+      return;
+    }
+
+    // 상대팀 ID 목록
+    const oppTeamIds = [...new Set(reqs.map(r => r[oppCol]).filter(Boolean))];
+
+    // 상대팀 이름 조회
+    const { data: oppTeams } = await _sb
+      .from('teams').select('id, title, status').in('id', oppTeamIds);
+
+    const teamMap = {};
+    (oppTeams || []).forEach(t => { teamMap[t.id] = t; });
+
+    // 셀렉트 옵션 구성
+    sel.innerHTML = '<option value="">💌 대화할 팀을 선택하세요</option>';
+    reqs.forEach(r => {
+      const oppId = r[oppCol];
+      const t = teamMap[oppId];
+      if (!t) return;
+      const statusLabel = r.status === 'matched' ? '🎉 매칭완료' : '⏳ 검토중';
+      const opt = document.createElement('option');
+      opt.value = oppId;
+      opt.textContent = `${t.title} [${statusLabel}]`;
+      sel.appendChild(opt);
+    });
+
+    // 첫 번째 팀 자동 선택
+    if (oppTeamIds.length > 0) {
+      sel.value = oppTeamIds[0];
+      switchChatTeam(oppTeamIds[0]);
+    } else {
+      renderMessages();
+    }
+
+  } catch(e) {
+    console.warn('[loadChatTeams]', e.message);
+    sel.innerHTML = '<option value="">팀 목록 로드 실패</option>';
+  }
+}
+window.loadChatTeams = loadChatTeams;
+
+// 대화 상대팀 전환
+function switchChatTeam(teamId) {
+  _currentChatTeamId = teamId || null;
+
+  // 헤더 타이틀 업데이트
+  const sel = document.getElementById('chat-team-select');
+  const selected = sel?.options[sel.selectedIndex];
+  const header = document.querySelector('#screen-messages .header-title');
+  if (header) {
+    header.textContent = teamId && selected?.textContent
+      ? `💬 ${selected.textContent.split(' [')[0]}`
+      : '💬 매칭 채팅';
+  }
+
+  renderMessages();
+}
+window.switchChatTeam = switchChatTeam;
 
 function renderMessages() {
   const container = document.getElementById('chat-messages');
   if (!container) return;
 
-  if (_localMessages.length === 0) {
+  const messages = _currentChatTeamId
+    ? (_teamMessages[_currentChatTeamId] || [])
+    : [];
+
+  if (!_currentChatTeamId) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:40px 20px;">
+        <div class="empty-icon">💬</div>
+        <div class="empty-title">대화할 팀을 선택해주세요</div>
+        <div class="empty-desc">위 드롭다운에서 신청한 팀을 선택하면 채팅이 시작됩니다</div>
+      </div>`;
+    return;
+  }
+
+  if (messages.length === 0) {
     container.innerHTML = `
       <div class="empty-state" style="padding:40px 20px;">
         <div class="empty-icon">💬</div>
         <div class="empty-title">아직 메시지가 없어요</div>
-        <div class="empty-desc">아래 버튼으로 빠르게 메시지를 보내보세요</div>
+        <div class="empty-desc">아래 버튼으로 첫 메시지를 보내보세요!</div>
       </div>`;
     return;
   }
 
   container.innerHTML = '';
-  for (const m of _localMessages) {
+  for (const m of messages) {
     const group = document.createElement('div');
     group.className = 'chat-group';
     group.style.alignItems = m.mine ? 'flex-end' : 'flex-start';
@@ -2146,23 +2326,24 @@ function _buildTimeStr() {
   return h >= 12 ? `오후 ${h - 12 || 12}:${mi}` : `오전 ${h}:${mi}`;
 }
 
-// 고정 메시지 전송
 function sendFixedMessage(text) {
   if (!state.profile) { showToast('로그인이 필요합니다'); return; }
-  _localMessages.push({ mine: true, text, time: _buildTimeStr() });
+  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
+  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
+  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
   renderMessages();
-  showToast('✅ 메시지 전송됨');
 }
 window.sendFixedMessage = sendFixedMessage;
 
-// 직접 입력 전송
 function sendMessage() {
   if (!state.profile) { showToast('로그인이 필요합니다'); return; }
+  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
   const input = document.getElementById('chat-input');
   const text  = input?.value.trim();
   if (!text) return;
   if (text.length > 200) { showToast('메시지는 200자 이하로 입력해주세요'); return; }
-  _localMessages.push({ mine: true, text, time: _buildTimeStr() });
+  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
+  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
   input.value = '';
   renderMessages();
 }
