@@ -1701,45 +1701,60 @@ window.registerTeam = registerTeam;
 // ============================================================
 async function loadTeamByCode() {
   const titleInput = document.getElementById('load-team-title')?.value.trim();
-  const pinInput   = document.getElementById('load-team-pin')?.value.trim();
+  const pinRaw     = document.getElementById('load-team-pin')?.value.trim();
 
   if (!titleInput) { showToast('팀 이름을 입력해주세요'); return; }
-  if (!pinInput || pinInput.length !== 4 || !/^\d{4}$/.test(pinInput)) {
-    showToast('4자리 숫자 PIN을 입력해주세요'); return;
+  if (!pinRaw || !/^\d{1,4}$/.test(pinRaw)) {
+    showToast('PIN은 숫자 4자리로 입력해주세요'); return;
   }
+  // 앞자리 0 포함 4자리로 패딩 (예: 123 → 0123)
+  const pinInput = pinRaw.padStart(4, '0');
 
   setBtnLoading('btn-load-team', true, '팀 불러오기');
   try {
-    // teams 테이블에서 title + team_pin 일치하는 팀 조회
+    // title + team_pin 으로 조회
     const { data: team, error } = await _sb
       .from('teams')
       .select('*, team_members(*)')
       .eq('title', titleInput)
       .eq('team_pin', pinInput)
-      .single();
+      .maybeSingle(); // single() 대신 maybeSingle() — 없어도 에러 안 남
 
-    if (error || !team) {
-      // team_pin 컬럼 없을 수도 있음 → title만으로 조회 후 PIN 없음 안내
-      showToast('❌ 팀을 찾을 수 없습니다. 팀 이름과 PIN을 확인해주세요.');
+    if (error) {
+      // team_pin 컬럼 자체가 없는 경우
+      if (error.code === 'PGRST204' || error.message?.includes('team_pin') || error.message?.includes('schema cache')) {
+        showToast('❌ DB에 team_pin 컬럼이 없습니다.\nSupabase SQL Editor에서 실행:\nALTER TABLE teams ADD COLUMN IF NOT EXISTS team_pin CHAR(4);');
+        return;
+      }
+      throw error;
+    }
+
+    if (!team) {
+      showToast('❌ 팀을 찾을 수 없습니다. 팀 이름과 PIN을 정확히 입력해주세요.');
       return;
     }
 
-    // 내 state.profile의 팀으로 임시 연결
     window._loadedTeam = team;
     const members = team.team_members || [];
 
-    // 팀 정보 미리보기 표시
     const previewEl = document.getElementById('load-team-preview');
     if (previewEl) {
       previewEl.innerHTML = `
-        <div style="background:#E8F5E9;border:1px solid #A5D6A7;border-radius:var(--radius-sm);padding:14px;margin-top:12px;">
-          <div style="font-size:14px;font-weight:700;color:#2E7D32;margin-bottom:6px;">✅ 팀 불러오기 성공!</div>
+        <div style="background:#E8F5E9;border:1px solid #A5D6A7;
+          border-radius:var(--radius-sm);padding:14px;margin-top:12px;">
+          <div style="font-size:14px;font-weight:700;color:#2E7D32;margin-bottom:6px;">
+            ✅ 팀 불러오기 성공!
+          </div>
           <div style="font-size:13px;color:#388E3C;">
             <strong>${esc(team.title)}</strong> · ${esc(team.university)} · 팀원 ${members.length}명
           </div>
+          <div style="font-size:12px;color:#66BB6A;margin-top:4px;">
+            이 팀 정보가 확인되었습니다. 홈 화면에서 팀을 확인해보세요.
+          </div>
         </div>`;
     }
-    showToast(`✅ "${team.title}" 팀을 불러왔습니다!`);
+    showToast(`✅ "${team.title}" 팀을 확인했습니다!`);
+
   } catch(err) {
     showToast('❌ 팀 불러오기 실패: ' + err.message);
   } finally {
@@ -1873,9 +1888,10 @@ async function openApplyScreen(teamId) {
       .single();
 
     if (error || !myTeam) {
-      // 팀 없음 → 안내 배너 표시
       if (preview)  preview.innerHTML = '';
       if (noBanner) noBanner.style.display = 'block';
+      // 신청 버튼 숨김 확실히
+      if (submitBtn) submitBtn.style.display = 'none';
       return;
     }
 
@@ -1940,12 +1956,24 @@ async function submitApply() {
   if (!profile) { showToast('로그인이 필요합니다'); return; }
 
   const targetTeamId = window._applyTargetTeamId;
-  if (!targetTeamId) { showToast('신청 대상팀 정보가 없습니다. 다시 시도해주세요.'); return; }
+  if (!targetTeamId) { showToast('신청 대상팀 정보가 없습니다. 팀 카드에서 다시 신청해주세요.'); return; }
 
-  const targetTeam = _cachedTeams.find(t => t.id === targetTeamId);
-  if (!targetTeam) { showToast('대상팀 정보를 찾을 수 없습니다.'); return; }
+  // _cachedTeams에서 먼저 찾고, 없으면 DB에서 직접 조회
+  let targetTeam = _cachedTeams.find(t => t.id === targetTeamId);
+  if (!targetTeam) {
+    const { data: fetched } = await _sb
+      .from('teams').select('id, gender, title, status')
+      .eq('id', targetTeamId).single();
+    targetTeam = fetched;
+  }
+  if (!targetTeam) { showToast('❌ 대상팀 정보를 찾을 수 없습니다.'); return; }
 
-  // 성별 교차 검증
+  // 매칭완료 팀에는 신청 불가
+  if (targetTeam.status === 'matched') {
+    showToast('❌ 이미 매칭이 완료된 팀입니다.'); return;
+  }
+
+  // 성별 교차 검증 (남→여성팀 / 여→남성팀)
   if (profile.gender === 'male' && targetTeam.gender !== 'female') {
     showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return;
   }
@@ -1955,19 +1983,23 @@ async function submitApply() {
 
   setBtnLoading('btn-submit-apply', true, '💌 신청 완료');
   try {
-    // 내 팀 조회 (ID만)
+    // 내 팀 조회
     const { data: myTeam, error: teamErr } = await _sb.from('teams')
       .select('id')
       .eq('leader_id', profile.id)
       .single();
 
     if (teamErr || !myTeam) {
-      showToast('❌ 등록된 팀이 없습니다. 팀 등록 후 신청해주세요.'); return;
+      showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.'); return;
+    }
+
+    // 자기 팀에는 신청 불가
+    if (myTeam.id === targetTeamId) {
+      showToast('❌ 자신의 팀에는 신청할 수 없습니다.'); return;
     }
 
     const message = document.getElementById('apply-message')?.value.trim() || '';
 
-    // match_requests INSERT — 성별 기준으로 male/female_team_id 구분
     const insertData = { status: 'pending', created_at: new Date().toISOString() };
     if (message) insertData.message = message;
 
@@ -1987,19 +2019,17 @@ async function submitApply() {
       }
       if (error.code === '42501' || error.message?.includes('row-level security')) {
         throw new Error(
-          'RLS 정책 오류 (match_requests INSERT 권한 없음) — ' +
-          'Supabase SQL Editor에서 아래 SQL을 실행해주세요:\n' +
-          'CREATE POLICY "match_requests_insert" ON match_requests FOR INSERT WITH CHECK (' +
-          'male_team_id IN (SELECT id FROM teams WHERE leader_id IN ' +
-          '(SELECT id FROM users WHERE auth_id = auth.uid())) OR ' +
-          'female_team_id IN (SELECT id FROM teams WHERE leader_id IN ' +
-          '(SELECT id FROM users WHERE auth_id = auth.uid())));'
+          'RLS 정책 오류 — Supabase SQL Editor에서 실행:\n' +
+          'DROP POLICY IF EXISTS "match_requests_insert" ON match_requests;\n' +
+          'CREATE POLICY "match_requests_insert" ON match_requests FOR INSERT WITH CHECK (\n' +
+          '  male_team_id IN (SELECT id FROM teams WHERE leader_id IN (SELECT id FROM users WHERE auth_id = auth.uid()))\n' +
+          '  OR female_team_id IN (SELECT id FROM teams WHERE leader_id IN (SELECT id FROM users WHERE auth_id = auth.uid()))\n' +
+          ');'
         );
       }
       throw error;
     }
 
-    // 신청 메시지 초기화
     const msgEl = document.getElementById('apply-message');
     if (msgEl) msgEl.value = '';
 
@@ -2008,7 +2038,7 @@ async function submitApply() {
     loadAndRenderRequests('sent');
 
   } catch(err) {
-    showToast('❌ 신청 오류 (RLS 또는 DB): ' + err.message, 6000);
+    showToast('❌ 신청 오류: ' + err.message, 6000);
   } finally {
     setBtnLoading('btn-submit-apply', false, '💌 신청 완료');
   }
@@ -3913,8 +3943,9 @@ window.toggleAll = toggleAll;
       </div>
       <div class="form-group" style="margin-bottom:10px;">
         <label class="form-label">PIN 4자리</label>
-        <input class="form-input" type="number" id="load-team-pin" style="height:44px;"
-          placeholder="0000" maxlength="4" max="9999" min="0">
+        <input class="form-input" type="text" id="load-team-pin" style="height:44px;"
+          placeholder="0000" maxlength="4" inputmode="numeric" pattern="\d{4}"
+          style="height:44px;letter-spacing:8px;font-size:20px;font-weight:700;text-align:center;">
       </div>
       <button class="btn btn-secondary btn-sm" id="btn-load-team"
         onclick="loadTeamByCode()" style="width:100%;height:44px;">
