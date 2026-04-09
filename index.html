@@ -1462,7 +1462,16 @@
       </div>
 
       <div style="padding:0 16px 24px;display:flex;flex-direction:column;gap:10px;">
-        <button class="btn btn-primary" onclick="state.profile ? showScreen('screen-apply') : showAuthGateModal('apply')">💌 과팅 신청하기</button>
+        <button class="btn btn-primary" onclick="
+          if (!state.profile) { showAuthGateModal('apply'); return; }
+          const team = _cachedTeams.find(t => t.id === window._currentDetailTeamId);
+          if (!team) { showToast('팀 정보를 찾을 수 없습니다.'); return; }
+          const pg = state.profile.gender;
+          const tg = team.gender;
+          if (pg === 'male' && tg !== 'female') { showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return; }
+          if (pg === 'female' && tg !== 'male') { showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return; }
+          openApplyScreen(window._currentDetailTeamId);
+        ">💌 과팅 신청하기</button>
         <button class="btn btn-outline" onclick="state.profile ? showToast('💬 메시지를 보내기 전 신청을 먼저 해주세요') : showAuthGateModal('message')">💬 채팅 먼저 하기</button>
       </div>
     </div>
@@ -1476,50 +1485,184 @@
       <div style="width:36px;"></div>
     </div>
     <div class="scroll-content" style="padding:0 20px 24px;">
-      <div style="background:var(--pink-soft);border-radius:var(--radius);padding:16px;margin-bottom:20px;text-align:center;">
-        <p style="font-size:14px;color:var(--gray-600);margin-bottom:4px;">신청 대상팀</p>
-        <p style="font-size:18px;font-weight:700;color:var(--pink);">춘천 핫한 공대생 3인 💌</p>
+
+      <!-- 신청 대상팀 -->
+      <div style="background:var(--pink-soft);border-radius:var(--radius);padding:16px;margin-bottom:16px;margin-top:16px;text-align:center;">
+        <p style="font-size:13px;color:var(--gray-500);margin-bottom:4px;">신청 대상팀</p>
+        <p id="apply-target-team-name" style="font-size:18px;font-weight:700;color:var(--pink);">—</p>
       </div>
 
-      <p style="font-size:14px;font-weight:700;color:var(--gray-800);margin-bottom:12px;">우리 팀 소개를 입력해주세요</p>
+      <p style="font-size:14px;font-weight:700;color:var(--gray-800);margin-bottom:8px;">우리 팀원 소개</p>
       <div class="info-box" style="margin-bottom:16px;">
         <span class="info-box-icon">💡</span>
-        <span>매력적인 팀 소개가 수락 확률을 높여요! 솔직하게 적어주세요.</span>
+        <span>팀원 1명은 필수, 2·3번은 선택입니다. 매력적인 소개가 수락 확률을 높여요!</span>
       </div>
 
-      <!-- 팀원 1 (본인) -->
+      <!-- 팀원 1 (필수) -->
       <div class="card card-p" style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-          <div style="background:var(--pink);color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">1</div>
-          <span style="font-size:14px;font-weight:700;">팀원 1 (나)</span>
-          <span class="chip chip-pink">팀장</span>
+          <div style="background:var(--pink);color:white;width:24px;height:24px;border-radius:50%;
+            display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">1</div>
+          <span style="font-size:14px;font-weight:700;">팀원 1 (나·팀장)</span>
+          <span class="chip chip-pink">필수</span>
         </div>
-        <div class="form-row">
-          <div class="form-group" style="margin-bottom:10px;">
+        <div class="form-row" style="margin-bottom:8px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">닉네임 <span class="required">*</span></label>
+            <input class="form-input" type="text" id="apply-m1-nickname" style="height:44px;" placeholder="닉네임" maxlength="50">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
             <label class="form-label">나이 <span class="required">*</span></label>
-            <input class="form-input" type="number" value="22" style="height:44px;">
-          </div>
-          <div class="form-group" style="margin-bottom:10px;">
-            <label class="form-label">MBTI</label>
-            <select class="form-select" style="height:44px;"><option>ENFJ</option></select>
+            <input class="form-input" type="number" id="apply-m1-age" style="height:44px;" placeholder="22" min="19" max="60">
           </div>
         </div>
-        <div class="form-group" style="margin-bottom:10px;">
+        <div class="form-row" style="margin-bottom:8px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">MBTI</label>
+            <select class="form-select" id="apply-m1-mbti" style="height:44px;">
+              <option value="">선택</option>
+              <option>INTJ</option><option>INTP</option><option>ENTJ</option><option>ENTP</option>
+              <option>INFJ</option><option>INFP</option><option>ENFJ</option><option>ENFP</option>
+              <option>ISTJ</option><option>ISFJ</option><option>ESTJ</option><option>ESFJ</option>
+              <option>ISTP</option><option>ISFP</option><option>ESTP</option><option>ESFP</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">흡연</label>
+            <div class="radio-group" style="height:44px;">
+              <div class="radio-item">
+                <input type="radio" name="apply-smoke1" id="apply-ns1" checked>
+                <label class="radio-label" for="apply-ns1" style="font-size:12px;">🚭 비흡연</label>
+              </div>
+              <div class="radio-item">
+                <input type="radio" name="apply-smoke1" id="apply-s1">
+                <label class="radio-label" for="apply-s1" style="font-size:12px;">🚬 흡연</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
           <label class="form-label">한줄 소개</label>
-          <input class="form-input" type="text" placeholder="나를 표현하는 한 문장" style="height:44px;">
+          <input class="form-input" type="text" id="apply-m1-intro" style="height:44px;"
+            placeholder="나를 표현하는 한 문장" maxlength="200">
         </div>
       </div>
 
-      <!-- 팀원 2, 3 -->
-      <div id="apply-members"><!-- 팀원 2,3 동일 구조 --></div>
+      <!-- 팀원 2 (선택) -->
+      <div class="card card-p" style="margin-bottom:12px;" id="apply-card-2">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:0;" onclick="toggleApplyMember(2)" style="cursor:pointer;">
+          <div style="background:var(--purple);color:white;width:24px;height:24px;border-radius:50%;
+            display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">2</div>
+          <span style="font-size:14px;font-weight:700;flex:1;">팀원 2 <span style="font-size:12px;color:var(--gray-400);font-weight:400;">(선택)</span></span>
+          <button type="button" id="apply-toggle-2" onclick="toggleApplyMember(2)"
+            style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--gray-400);">＋</button>
+        </div>
+        <div id="apply-fields-2" style="display:none;margin-top:12px;">
+          <div class="form-row" style="margin-bottom:8px;">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">닉네임</label>
+              <input class="form-input" type="text" id="apply-m2-nickname" style="height:44px;" placeholder="닉네임" maxlength="50">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">나이</label>
+              <input class="form-input" type="number" id="apply-m2-age" style="height:44px;" placeholder="22" min="19" max="60">
+            </div>
+          </div>
+          <div class="form-row" style="margin-bottom:8px;">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">MBTI</label>
+              <select class="form-select" id="apply-m2-mbti" style="height:44px;">
+                <option value="">선택</option>
+                <option>INTJ</option><option>INTP</option><option>ENTJ</option><option>ENTP</option>
+                <option>INFJ</option><option>INFP</option><option>ENFJ</option><option>ENFP</option>
+                <option>ISTJ</option><option>ISFJ</option><option>ESTJ</option><option>ESFJ</option>
+                <option>ISTP</option><option>ISFP</option><option>ESTP</option><option>ESFP</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">흡연</label>
+              <div class="radio-group" style="height:44px;">
+                <div class="radio-item">
+                  <input type="radio" name="apply-smoke2" id="apply-ns2" checked>
+                  <label class="radio-label" for="apply-ns2" style="font-size:12px;">🚭 비흡연</label>
+                </div>
+                <div class="radio-item">
+                  <input type="radio" name="apply-smoke2" id="apply-s2">
+                  <label class="radio-label" for="apply-s2" style="font-size:12px;">🚬 흡연</label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">한줄 소개</label>
+            <input class="form-input" type="text" id="apply-m2-intro" style="height:44px;"
+              placeholder="나를 표현하는 한 문장" maxlength="200">
+          </div>
+        </div>
+      </div>
 
-      <div class="card card-p" style="margin-bottom:12px;">
-        <p style="font-size:14px;font-weight:700;margin-bottom:10px;">팀 신청 메시지</p>
-        <textarea class="form-textarea" placeholder="상대팀에게 전하고 싶은 말을 자유롭게 써주세요 (예: 맛집 투어 같이 가요! 🍜)"></textarea>
+      <!-- 팀원 3 (선택) -->
+      <div class="card card-p" style="margin-bottom:12px;" id="apply-card-3">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:0;">
+          <div style="background:var(--purple);color:white;width:24px;height:24px;border-radius:50%;
+            display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">3</div>
+          <span style="font-size:14px;font-weight:700;flex:1;">팀원 3 <span style="font-size:12px;color:var(--gray-400);font-weight:400;">(선택)</span></span>
+          <button type="button" id="apply-toggle-3" onclick="toggleApplyMember(3)"
+            style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--gray-400);">＋</button>
+        </div>
+        <div id="apply-fields-3" style="display:none;margin-top:12px;">
+          <div class="form-row" style="margin-bottom:8px;">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">닉네임</label>
+              <input class="form-input" type="text" id="apply-m3-nickname" style="height:44px;" placeholder="닉네임" maxlength="50">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">나이</label>
+              <input class="form-input" type="number" id="apply-m3-age" style="height:44px;" placeholder="22" min="19" max="60">
+            </div>
+          </div>
+          <div class="form-row" style="margin-bottom:8px;">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">MBTI</label>
+              <select class="form-select" id="apply-m3-mbti" style="height:44px;">
+                <option value="">선택</option>
+                <option>INTJ</option><option>INTP</option><option>ENTJ</option><option>ENTP</option>
+                <option>INFJ</option><option>INFP</option><option>ENFJ</option><option>ENFP</option>
+                <option>ISTJ</option><option>ISFJ</option><option>ESTJ</option><option>ESFJ</option>
+                <option>ISTP</option><option>ISFP</option><option>ESTP</option><option>ESFP</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">흡연</label>
+              <div class="radio-group" style="height:44px;">
+                <div class="radio-item">
+                  <input type="radio" name="apply-smoke3" id="apply-ns3" checked>
+                  <label class="radio-label" for="apply-ns3" style="font-size:12px;">🚭 비흡연</label>
+                </div>
+                <div class="radio-item">
+                  <input type="radio" name="apply-smoke3" id="apply-s3">
+                  <label class="radio-label" for="apply-s3" style="font-size:12px;">🚬 흡연</label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">한줄 소개</label>
+            <input class="form-input" type="text" id="apply-m3-intro" style="height:44px;"
+              placeholder="나를 표현하는 한 문장" maxlength="200">
+          </div>
+        </div>
+      </div>
+
+      <!-- 신청 메시지 -->
+      <div class="card card-p" style="margin-bottom:16px;">
+        <p style="font-size:14px;font-weight:700;margin-bottom:10px;">💬 팀 신청 메시지</p>
+        <textarea class="form-textarea" id="apply-message"
+          placeholder="상대팀에게 전하고 싶은 말을 자유롭게 써주세요 (예: 맛집 투어 같이 가요! 🍜)"></textarea>
       </div>
 
       <button class="btn btn-primary" onclick="submitApply()">💌 신청 완료</button>
-      <p style="font-size:12px;color:var(--gray-400);text-align:center;margin-top:10px;">상대팀이 수락 시 카카오 연결 정보가 공개됩니다</p>
+      <p style="font-size:12px;color:var(--gray-400);text-align:center;margin-top:10px;">상대팀이 수락 시 연락처 정보가 공개됩니다</p>
     </div>
   </div>
 
@@ -1895,7 +2038,7 @@
       </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-outline" style="flex:1;" onclick="closeModal('modal-report')">취소</button>
-        <button class="btn btn-danger" style="flex:1;" onclick="submitReport()">신고 접수</button>
+        <button class="btn btn-danger" id="btn-submit-report" style="flex:1;" onclick="submitReport()">신고 접수</button>
       </div>
     </div>
   </div>
