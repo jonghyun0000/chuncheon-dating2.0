@@ -3576,16 +3576,22 @@ async function adminDeleteUser(userId) {
     '• 회원 데이터, 팀, 신청내역, 입금 내역이 모두 삭제됩니다\n' +
     '• 이 작업은 되돌릴 수 없습니다')) return;
 
-  const ignore = async (promise) => { try { await promise; } catch(e) { console.warn('[adminDelete]', e.message); } };
+  const ignore = async (promise) => {
+    try { await promise; } catch(e) { console.warn('[adminDelete]', e.message); }
+  };
+
+  // 버튼 로딩
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = '삭제 중...'; }
 
   try {
-    // 1. 팀 목록 먼저 수집
+    // STEP 1: 팀 목록 수집
     const { data: myTeams } = await _sb.from('teams').select('id').eq('leader_id', userId);
     const teamIds = (myTeams || []).map(t => t.id);
 
-    // 2. 자식 테이블 순서대로 삭제 (FK 제약 대응)
+    // STEP 2: FK 순서대로 자식 테이블 삭제
     if (teamIds.length) {
-      await ignore(_sb.from('match_requests').delete().in('male_team_id', teamIds));
+      await ignore(_sb.from('match_requests').delete().in('male_team_id',   teamIds));
       await ignore(_sb.from('match_requests').delete().in('female_team_id', teamIds));
       await ignore(_sb.from('team_members').delete().in('team_id', teamIds));
       await ignore(_sb.from('teams').delete().in('id', teamIds));
@@ -3596,16 +3602,41 @@ async function adminDeleteUser(userId) {
     await ignore(_sb.from('reports').delete().eq('reporter_id', userId));
     await ignore(_sb.from('reviews').delete().eq('user_id', userId));
 
-    // 3. users 삭제
+    // STEP 3: users 행 삭제 시도
     const { error: delErr } = await _sb.from('users').delete().eq('id', userId);
-    if (delErr) throw new Error('회원 삭제 실패 (RLS 또는 FK): ' + delErr.message);
+
+    if (delErr) {
+      // RLS로 삭제 불가 → 완전 비활성화로 폴백 (재로그인 불가, 노출 안 됨)
+      console.warn('[adminDeleteUser] users DELETE 실패, 비활성화로 대체:', delErr.message);
+      const { error: deactErr } = await _sb.from('users').update({
+        deleted_at:      new Date().toISOString(),
+        profile_active:  false,
+        is_banned:       true,
+        username:        `__deleted_${Date.now()}`,  // 아이디 충돌 방지
+      }).eq('id', userId);
+
+      if (deactErr) {
+        throw new Error(
+          '삭제 및 비활성화 모두 실패했습니다.\n' +
+          'Supabase SQL Editor에서 아래 SQL을 실행해주세요:\n\n' +
+          'CREATE POLICY "users_admin_delete" ON users FOR DELETE USING (\n' +
+          '  EXISTS (SELECT 1 FROM users WHERE auth_id = auth.uid() AND role = \'admin\')\n' +
+          ');'
+        );
+      }
+      showToast('⚠️ 회원이 완전 비활성화되었습니다. (DB 정책 추가 시 완전 삭제 가능)');
+    } else {
+      showToast('🗑️ 회원이 삭제되었습니다');
+    }
 
     await writeAdminLog('user_delete', 'users', userId);
     closeModal('modal-admin-user');
-    showToast('🗑️ 회원이 삭제되었습니다');
     switchAdminTab('users', null);
+
   } catch(err) {
-    showToast('❌ 삭제 오류: ' + err.message, 5000);
+    showToast('❌ 삭제 오류: ' + err.message, 6000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑️ 회원 완전 삭제'; }
   }
 }
 window.adminDeleteUser = adminDeleteUser;
