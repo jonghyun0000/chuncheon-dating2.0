@@ -2694,19 +2694,33 @@ async function renderAdminDashboard() {
 
   try {
     const results = await Promise.allSettled([
-      _sb.from('users').select('*', { count:'exact', head:true }).is('deleted_at', null),
-      _sb.from('users').select('*', { count:'exact', head:true }).eq('gender','male').is('deleted_at', null),
-      _sb.from('users').select('*', { count:'exact', head:true }).eq('gender','female').is('deleted_at', null),
-      _sb.from('student_verifications').select('*', { count:'exact', head:true }).eq('status', 'pending'),
-      _sb.from('deposits').select('*', { count:'exact', head:true }).eq('status', 'pending_confirm'),
-      _sb.from('teams').select('*', { count:'exact', head:true }).eq('gender', 'male').eq('status', 'recruiting'),
-      _sb.from('teams').select('*', { count:'exact', head:true }).eq('gender', 'female').eq('status', 'recruiting'),
+      // 활성 회원만 (deleted_at없고 banned아님)
+      _sb.from('users').select('*', { count:'exact', head:true })
+        .is('deleted_at', null).eq('is_banned', false),
+      _sb.from('users').select('*', { count:'exact', head:true })
+        .eq('gender','male').is('deleted_at', null).eq('is_banned', false),
+      _sb.from('users').select('*', { count:'exact', head:true })
+        .eq('gender','female').is('deleted_at', null).eq('is_banned', false),
+      // 활성 회원의 인증 대기만
+      _sb.from('student_verifications').select('*', { count:'exact', head:true })
+        .eq('status', 'pending'),
+      // 활성 회원의 입금 대기만 (deposits join users로 필터)
+      _sb.from('deposits').select('*, users!deposits_user_id_fkey(deleted_at,is_banned)')
+        .eq('status', 'pending_confirm'),
+      _sb.from('teams').select('*', { count:'exact', head:true })
+        .eq('gender', 'male').eq('status', 'recruiting'),
+      _sb.from('teams').select('*', { count:'exact', head:true })
+        .eq('gender', 'female').eq('status', 'recruiting'),
       _sb.from('matches').select('*', { count:'exact', head:true }),
       _sb.from('reports').select('*', { count:'exact', head:true }).eq('status', 'pending'),
-      // 확정된 입금 합계
-      _sb.from('deposits').select('amount').eq('status', 'confirmed'),
-      // 후기 승인 대기
+      // 활성 회원의 확정 입금액만
+      _sb.from('deposits').select('amount, users!deposits_user_id_fkey(deleted_at,is_banned)')
+        .eq('status', 'confirmed'),
+      // 후기 대기
       _sb.from('reviews').select('*', { count:'exact', head:true }).eq('status', 'pending'),
+      // 비활성 회원 수
+      _sb.from('users').select('*', { count:'exact', head:true })
+        .or('deleted_at.not.is.null,is_banned.eq.true'),
     ]);
 
     const safeCount = (r, idx) => {
@@ -2719,18 +2733,26 @@ async function renderAdminDashboard() {
     const maleUsers      = safeCount(results[1], 1);
     const femaleUsers    = safeCount(results[2], 2);
     const pendingVerif   = safeCount(results[3], 3);
-    const pendingDeposit = safeCount(results[4], 4);
     const maleTeams      = safeCount(results[5], 5);
     const femaleTeams    = safeCount(results[6], 6);
     const matched        = safeCount(results[7], 7);
     const reports        = safeCount(results[8], 8);
     const pendingReviews = safeCount(results[10], 10);
+    const inactiveUsers  = safeCount(results[11], 11);
 
-    // 누적 입금액 계산
+    // 입금 대기: 활성 회원만 카운트
+    let pendingDeposit = 0;
+    if (results[4].status === 'fulfilled' && !results[4].value?.error) {
+      pendingDeposit = (results[4].value?.data || [])
+        .filter(d => !d.users?.deleted_at && !d.users?.is_banned).length;
+    }
+
+    // 누적 입금액: 활성 회원만 합산
     let totalDeposit = 0;
     if (results[9].status === 'fulfilled' && !results[9].value?.error) {
-      const rows = results[9].value?.data || [];
-      totalDeposit = rows.reduce((s, r) => s + (r.amount || 0), 0);
+      totalDeposit = (results[9].value?.data || [])
+        .filter(d => !d.users?.deleted_at && !d.users?.is_banned)
+        .reduce((s, d) => s + (d.amount || 0), 0);
     }
 
     container.innerHTML = `
@@ -2780,6 +2802,7 @@ async function renderAdminDashboard() {
         ${adminStat('활성 여성팀',   femaleTeams,'', "switchAdminTab('teams',null)")}
         ${adminStat('신고 접수',     reports,    '', "switchAdminTab('reports',null)", reports>0?'var(--error)':'')}
         ${adminStat('후기 대기',     pendingReviews, pendingReviews>0?'✏️':'', "switchAdminTab('reviews',null)", pendingReviews>0?'var(--warning)':'')}
+        ${adminStat('비활성 회원',   inactiveUsers,  inactiveUsers>0?'🚫':'', "switchAdminTab('inactive',null)", inactiveUsers>0?'var(--gray-500)':'')}
       </div>
 
       <div style="padding:0 16px 16px;">
@@ -2790,6 +2813,7 @@ async function renderAdminDashboard() {
           <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('deposit',null)">💳 입금 (${pendingDeposit})</button>
           <button class="btn btn-danger btn-sm"    style="flex:1;min-width:90px;" onclick="switchAdminTab('reports',null)">🚨 신고 (${reports})</button>
           <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('reviews',null)">✏️ 후기 (${pendingReviews})</button>
+          <button class="btn btn-outline btn-sm"   style="flex:1;min-width:90px;" onclick="switchAdminTab('inactive',null)">🚫 비활성 (${inactiveUsers})</button>
         </div>
       </div>`;
   } catch(err) {
@@ -2831,8 +2855,9 @@ async function switchAdminTab(tab, el) {
     const { data: users, error } = await _sb
       .from('users')
       .select('*, student_verifications!student_verifications_user_id_fkey(status), deposits!deposits_user_id_fkey(status,amount,depositor_name)')
-      .is('deleted_at', null)          // 삭제된 회원 제외
-      .not('username', 'like', '__del_%')  // 비활성화된 회원 제외
+      .is('deleted_at', null)
+      .eq('is_banned', false)
+      .not('username', 'like', '__del_%')
       .order('created_at', { ascending: false });
 
     if (error) { container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">${esc(error.message)}</div></div>`; return; }
@@ -2854,7 +2879,7 @@ async function switchAdminTab(tab, el) {
   if (tab === 'verif') {
     const { data: verifs, error: verifListErr } = await _sb
       .from('student_verifications')
-      .select('*, users!student_verifications_user_id_fkey(id,nickname,username,university,gender)')
+      .select('*, users!student_verifications_user_id_fkey(id,nickname,username,university,gender,deleted_at,is_banned)')
       .order('created_at', { ascending: false });
 
     if (verifListErr) {
@@ -2864,8 +2889,9 @@ async function switchAdminTab(tab, el) {
       return;
     }
 
-    // 서명된 URL 생성 (5분 유효) — 병렬 처리
-    const rows = await Promise.all((verifs || []).map(async v => {
+    // 비활성 회원의 인증 제외 + 서명된 URL 생성
+    const activeVerifs = (verifs || []).filter(v => !v.users?.deleted_at && !v.users?.is_banned);
+    const rows = await Promise.all(activeVerifs.map(async v => {
       if (v.image_path) {
         const { data: urlData } = await _sb.storage
           .from('student-verifications').createSignedUrl(v.image_path, 300);
@@ -2916,7 +2942,7 @@ async function switchAdminTab(tab, el) {
   if (tab === 'deposit') {
     const { data: deposits, error: depositListErr } = await _sb
       .from('deposits')
-      .select('*, users!deposits_user_id_fkey(id,nickname,username,gender,deleted_at)')
+      .select('*, users!deposits_user_id_fkey(id,nickname,username,gender,deleted_at,is_banned)')
       .order('created_at', { ascending: false });
 
     if (depositListErr) {
@@ -2926,8 +2952,8 @@ async function switchAdminTab(tab, el) {
       return;
     }
 
-    // deleted_at 있는 유저의 입금 내역 제외
-    const activeDeposits = (deposits||[]).filter(d => !d.users?.deleted_at);
+    // 비활성(deleted_at 또는 is_banned) 회원 제외
+    const activeDeposits = (deposits||[]).filter(d => !d.users?.deleted_at && !d.users?.is_banned);
 
     container.innerHTML = `
       <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">💳 입금 관리</div>
@@ -3004,6 +3030,75 @@ async function switchAdminTab(tab, el) {
                     onclick="adminDismissReport('${esc(r.id)}')">기각</button>
                 </div>` : ''}
             </div>`).join('')}
+      </div>`;
+    return;
+  }
+
+  // ── 비활성 회원 관리
+  if (tab === 'inactive') {
+    const { data: inactives, error: inactErr } = await _sb
+      .from('users')
+      .select('*, deposits!deposits_user_id_fkey(status,amount)')
+      .or('deleted_at.not.is.null,is_banned.eq.true')
+      .order('created_at', { ascending: false });
+
+    if (inactErr) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div>
+        <div class="empty-title">조회 실패</div>
+        <div class="empty-desc">${esc(inactErr.message)}</div></div>`;
+      return;
+    }
+
+    const renderInactiveRow = (u) => {
+      const age = u.birth_year ? new Date().getFullYear() - u.birth_year + 1 : '-';
+      const reason = u.deleted_at ? '🗑️ 삭제처리' : u.is_banned ? '🚫 이용제한' : '⏸️ 비활성';
+      const d = u.deposits?.[0] || {};
+      return `
+      <div class="admin-list-item">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+          <div>
+            <div style="font-size:14px;font-weight:700;">${esc(u.nickname||'-')}
+              <span style="font-size:11px;color:var(--gray-400);font-weight:400;margin-left:4px;">
+                @${esc(u.username?.startsWith('__del_') ? '(삭제됨)' : u.username||'-')}
+              </span>
+            </div>
+            <div style="font-size:12px;color:var(--gray-500);margin-top:2px;">
+              ${esc(u.university||'-')} · ${esc(u.department||'-')} · ${age}세
+              · ${u.gender==='male'?'👨 남성':'👩 여성'}
+            </div>
+            ${u.phone_number ? `<div style="font-size:12px;color:var(--gray-500);">📞 ${esc(u.phone_number)}</div>` : ''}
+          </div>
+          <span class="chip chip-gray" style="flex-shrink:0;font-size:11px;">${reason}</span>
+        </div>
+        <div style="font-size:11px;color:var(--gray-400);margin-bottom:8px;">
+          가입일: ${u.created_at ? new Date(u.created_at).toLocaleDateString('ko-KR') : '-'}
+          ${u.deleted_at ? ' · 비활성: ' + new Date(u.deleted_at).toLocaleDateString('ko-KR') : ''}
+          ${d.amount ? ' · 입금: ' + d.amount.toLocaleString() + '원' : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm"
+            onclick="adminRestoreUser('${esc(u.id)}')">🔄 복구</button>
+          <button class="btn btn-outline btn-sm"
+            onclick="openAdminUserDetail('${esc(u.id)}')">👤 상세</button>
+        </div>
+      </div>`;
+    };
+
+    container.innerHTML = `
+      <div style="padding:12px 16px 4px;font-size:14px;font-weight:700;">
+        🚫 비활성 회원 관리
+        <span style="font-size:12px;font-weight:400;color:var(--gray-500);margin-left:8px;">
+          총 ${(inactives||[]).length}명
+        </span>
+      </div>
+      <div style="padding:8px 16px;background:#FFF3E0;font-size:12px;color:#E65100;
+        border-bottom:1px solid #FFE0B2;margin-bottom:4px;">
+        ⚠️ 비활성 회원은 회원관리·인증관리·입금관리·통계에서 제외됩니다. 복구 시 다시 활성화됩니다.
+      </div>
+      <div class="menu-list">
+        ${(inactives||[]).length === 0
+          ? '<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">비활성 회원 없음</div></div>'
+          : (inactives||[]).map(renderInactiveRow).join('')}
       </div>`;
     return;
   }
@@ -3337,12 +3432,9 @@ async function openAdminUserDetail(userId) {
         ? `<button class="btn btn-danger btn-sm" onclick="adminBanUser('${esc(u.id)}',null)">🚫 이용 제한</button>`
         : `<button class="btn btn-primary btn-sm" onclick="adminUnbanUser('${esc(u.id)}')">✅ 제재 해제</button>`}
       ${u.profile_active
-        ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">⏸️ 비활성화</button>`
+        ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">🚫 비활성화</button>`
         : `<button class="btn btn-secondary btn-sm" onclick="adminActivateUser('${esc(u.id)}')">▶️ 활성화</button>`}
     </div>
-    <button class="btn btn-danger btn-sm"
-      style="width:100%;margin-bottom:8px;background:#B71C1C;"
-      onclick="adminDeleteUser('${esc(u.id)}')">🗑️ 회원 완전 삭제</button>
     <button class="btn btn-outline btn-sm" style="width:100%;"
       onclick="closeModal('modal-admin-user')">닫기</button>`;
 
@@ -3664,23 +3756,50 @@ async function adminActivateUser(userId) {
 }
 window.adminActivateUser = adminActivateUser;
 
-// 회원 비활성화 (profile_active = false)
+// 회원 비활성화 — 모든 목록·통계에서 제외
 async function adminDeactivateUser(userId) {
   try { assertAdmin(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
-  if (!confirm('이 회원을 비활성화하시겠습니까?\n서비스 이용이 제한됩니다.')) return;
+  if (!confirm('이 회원을 비활성화하시겠습니까?\n\n• 회원관리·인증관리·입금관리·통계에서 제외됩니다\n• 로그인 및 서비스 이용이 불가합니다\n• 비활성회원 탭에서 복구할 수 있습니다')) return;
 
   try {
-    await _sb.from('users').update({ profile_active: false }).eq('id', userId);
+    const { error } = await _sb.from('users').update({
+      deleted_at:     new Date().toISOString(),
+      profile_active: false,
+      is_banned:      true,
+    }).eq('id', userId);
+    if (error) throw error;
     await writeAdminLog('user_deactivate', 'users', userId);
     closeModal('modal-admin-user');
-    showToast('⏸️ 회원이 비활성화되었습니다');
+    showToast('🚫 회원이 비활성화되었습니다');
     switchAdminTab('users', null);
   } catch(err) {
     showToast('❌ ' + err.message);
   }
 }
 window.adminDeactivateUser = adminDeactivateUser;
+
+// 비활성 회원 복구
+async function adminRestoreUser(userId) {
+  try { assertAdmin(); } catch { return; }
+  if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
+  if (!confirm('이 회원을 복구하시겠습니까?\n회원관리·통계에 다시 포함됩니다.')) return;
+
+  try {
+    const { error } = await _sb.from('users').update({
+      deleted_at:     null,
+      profile_active: false,   // 복구 후 관리자가 별도 활성화
+      is_banned:      false,
+    }).eq('id', userId);
+    if (error) throw error;
+    await writeAdminLog('user_restore', 'users', userId);
+    showToast('✅ 회원이 복구되었습니다. 필요 시 활성화해주세요.');
+    switchAdminTab('inactive', null);
+  } catch(err) {
+    showToast('❌ ' + err.message);
+  }
+}
+window.adminRestoreUser = adminRestoreUser;
 
 // 신고 기각
 async function adminDismissReport(reportId) {
