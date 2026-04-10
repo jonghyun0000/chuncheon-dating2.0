@@ -1595,21 +1595,11 @@ async function registerTeam() {
     showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
   }
 
-  // ── 팀 PIN (4자리 숫자 필수)
-  const teamPinRaw = document.getElementById('team-pin')?.value.trim();
-  if (!teamPinRaw || !/^\d{4}$/.test(teamPinRaw)) {
-    showToast('팀 PIN은 숫자 4자리로 입력해주세요 (예: 1234)'); return;
-  }
-  const teamPin = teamPinRaw;
-
-  // ── 인증 여부: profile_active + 학생증 승인 여부로 판단
-  //   is_verified = true → 홈 목록 상단 노출 혜택
+  // ── 인증 여부
   const isVerified = !!profile.profile_active;
 
   setBtnLoading('btn-team-register', true, '팀 등록하기 🎉');
   try {
-    // ★ DB에 없는 컬럼(is_verified, contact_phone)이 있을 수 있으므로
-    //   단계적으로 제외하며 재시도하는 안전한 INSERT
     const isMissingCol = (err) =>
       err?.message?.includes('schema cache') ||
       err?.message?.includes('Could not find') ||
@@ -1625,7 +1615,6 @@ async function registerTeam() {
       status:        'recruiting',
       contact_phone: phoneNum  || null,
       contact_kakao: kakaoId   || null,
-      team_pin:      teamPin,
       is_verified:   isVerified
     }).select().single());
 
@@ -1638,8 +1627,7 @@ async function registerTeam() {
         university:    profile.university,
         status:        'recruiting',
         contact_phone: phoneNum || null,
-        contact_kakao: kakaoId  || null,
-        team_pin:      teamPin
+        contact_kakao: kakaoId  || null
       }).select().single());
     }
 
@@ -1651,20 +1639,18 @@ async function registerTeam() {
         title,
         university:    profile.university,
         status:        'recruiting',
-        contact_phone: phoneNum || null,
-        team_pin:      teamPin
+        contact_phone: phoneNum || null
       }).select().single());
     }
 
-    // 시도 4: team_pin도 제외 (컬럼 없는 구버전 DB)
+    // 시도 4: contact_phone도 제외
     if (teamErr && isMissingCol(teamErr)) {
       ({ data: team, error: teamErr } = await _sb.from('teams').insert({
         leader_id:  profile.id,
         gender:     profile.gender,
         title,
         university: profile.university,
-        status:     'recruiting',
-        contact_phone: phoneNum || null
+        status:     'recruiting'
       }).select().single());
     }
 
@@ -1685,7 +1671,7 @@ async function registerTeam() {
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
     if (memberErr) throw new Error('팀원 등록 실패: ' + memberErr.message);
 
-    showToast(`🎉 팀이 등록되었습니다! PIN: ${teamPin} (메모해두세요)`);
+    showToast(`🎉 팀이 등록되었습니다! (팀원 ${members.length}명)`);
     await loadTeams();
     showScreen('screen-home');
   } catch(err) {
@@ -1695,73 +1681,6 @@ async function registerTeam() {
   }
 }
 window.registerTeam = registerTeam;
-
-// ============================================================
-// 6️⃣ 팀 불러오기 — 팀명 + 4자리 PIN
-// ============================================================
-async function loadTeamByCode() {
-  const titleInput = document.getElementById('load-team-title')?.value.trim();
-  const pinRaw     = document.getElementById('load-team-pin')?.value.trim();
-
-  if (!titleInput) { showToast('팀 이름을 입력해주세요'); return; }
-  if (!pinRaw || !/^\d{1,4}$/.test(pinRaw)) {
-    showToast('PIN은 숫자 4자리로 입력해주세요'); return;
-  }
-  // 앞자리 0 포함 4자리로 패딩 (예: 123 → 0123)
-  const pinInput = pinRaw.padStart(4, '0');
-
-  setBtnLoading('btn-load-team', true, '팀 불러오기');
-  try {
-    // title + team_pin 으로 조회
-    const { data: team, error } = await _sb
-      .from('teams')
-      .select('*, team_members(*)')
-      .eq('title', titleInput)
-      .eq('team_pin', pinInput)
-      .maybeSingle(); // single() 대신 maybeSingle() — 없어도 에러 안 남
-
-    if (error) {
-      // team_pin 컬럼 자체가 없는 경우
-      if (error.code === 'PGRST204' || error.message?.includes('team_pin') || error.message?.includes('schema cache')) {
-        showToast('❌ DB에 team_pin 컬럼이 없습니다.\nSupabase SQL Editor에서 실행:\nALTER TABLE teams ADD COLUMN IF NOT EXISTS team_pin CHAR(4);');
-        return;
-      }
-      throw error;
-    }
-
-    if (!team) {
-      showToast('❌ 팀을 찾을 수 없습니다. 팀 이름과 PIN을 정확히 입력해주세요.');
-      return;
-    }
-
-    window._loadedTeam = team;
-    const members = team.team_members || [];
-
-    const previewEl = document.getElementById('load-team-preview');
-    if (previewEl) {
-      previewEl.innerHTML = `
-        <div style="background:#E8F5E9;border:1px solid #A5D6A7;
-          border-radius:var(--radius-sm);padding:14px;margin-top:12px;">
-          <div style="font-size:14px;font-weight:700;color:#2E7D32;margin-bottom:6px;">
-            ✅ 팀 불러오기 성공!
-          </div>
-          <div style="font-size:13px;color:#388E3C;">
-            <strong>${esc(team.title)}</strong> · ${esc(team.university)} · 팀원 ${members.length}명
-          </div>
-          <div style="font-size:12px;color:#66BB6A;margin-top:4px;">
-            이 팀 정보가 확인되었습니다. 홈 화면에서 팀을 확인해보세요.
-          </div>
-        </div>`;
-    }
-    showToast(`✅ "${team.title}" 팀을 확인했습니다!`);
-
-  } catch(err) {
-    showToast('❌ 팀 불러오기 실패: ' + err.message);
-  } finally {
-    setBtnLoading('btn-load-team', false, '팀 불러오기');
-  }
-}
-window.loadTeamByCode = loadTeamByCode;
 
 // ============================================================
 // 4️⃣ 과팅 후기 시스템
@@ -2079,38 +1998,46 @@ async function loadAndRenderRequests(tab) {
 
     let data, error;
     const profile = state.profile;
-    const gender  = profile?.gender; // 'male' | 'female'
+    const gender  = profile?.gender;
 
     if (tab === 'sent') {
-      // 내가 보낸 신청: 내 팀이 신청자 쪽
-      // 남성 → male_team_id = myTeam.id / 여성 → female_team_id = myTeam.id
-      if (gender === 'male') {
-        ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
-          .eq('male_team_id', myTeam.id)
-          .order('created_at', { ascending: false }));
-      } else {
+      // 내가 보낸 신청 = 내 팀이 신청자 측
+      // 여성팀이 남성팀에게 신청 → female_team_id = 내 팀
+      // 남성팀이 여성팀에게 신청 → male_team_id = 내 팀
+      if (gender === 'female') {
         ({ data, error } = await _sb.from('match_requests')
           .select('*, teams!match_requests_male_team_id_fkey(title,university)')
           .eq('female_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
+      } else {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
           .order('created_at', { ascending: false }));
       }
     } else {
-      // 받은 신청: 내 팀이 수신자 쪽
-      // 남성팀은 female_team_id로 신청받음 → male_team_id = myTeam.id 중 상대가 여성
-      // 여성팀은 male_team_id로 신청받음 → female_team_id = myTeam.id 중 상대가 남성
+      // 받은 신청 = 상대팀이 내 팀에게 신청한 것 = 반대 컬럼이 내 팀
+      // 내가 남성팀 → 여성팀이 나에게 신청 → female_team_id는 상대, male_team_id = 내 팀
+      //   BUT: 이 경우 내가 보낸 것도 male_team_id=내팀이므로 구분 불가
+      //   → 실제 서비스 로직: 여성이 남성에게 신청하는 구조
+      //   → 남성 received = female_team_id = 상대가 신청자, male_team_id = 내팀
+      //   → 여성 received = 없음 (여성은 신청만 함)
       if (gender === 'male') {
+        // 남성팀이 받은 신청 = 여성팀이 신청한 것 → male_team_id = 내팀
+        // sent랑 같은 조건이지만 received는 status=pending인 것만 (아직 처리 안 된 것)
+        // 단, sent에서 이미 보여주므로 received는 "상대방이 보낸 신청"
+        // → 현재 구조상 남성 received와 sent가 동일 → received 탭을 숨기거나 
+        //   "받은 신청" = 여성팀(상대)이 신청한 건 = male_team_id=내팀 + status=pending
         ({ data, error } = await _sb.from('match_requests')
           .select('*, teams!match_requests_female_team_id_fkey(title,university)')
           .eq('male_team_id', myTeam.id)
           .eq('status', 'pending')
           .order('created_at', { ascending: false }));
       } else {
-        ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
-          .eq('female_team_id', myTeam.id)
-          .eq('status', 'pending')
-          .order('created_at', { ascending: false }));
+        // 여성팀이 받은 신청 = 없음 (여성이 신청하는 구조)
+        // 빈 배열 반환
+        data = [];
+        error = null;
       }
     }
 
@@ -2385,11 +2312,24 @@ async function cancelApply(requestId) {
   try {
     const { error } = await _sb.from('match_requests')
       .delete().eq('id', requestId);
-    if (error) throw error;
-    showToast('신청이 취소되었습니다');
+    if (error) {
+      if (error.code === '42501' || error.message?.includes('row-level security')) {
+        throw new Error(
+          'RLS 정책 오류 — Supabase SQL Editor에서 실행:\n' +
+          'DROP POLICY IF EXISTS "match_requests_delete_own" ON match_requests;\n' +
+          'CREATE POLICY "match_requests_delete_own" ON match_requests\n' +
+          '  FOR DELETE USING (\n' +
+          '    male_team_id IN (SELECT id FROM teams WHERE leader_id IN (SELECT id FROM users WHERE auth_id = auth.uid()))\n' +
+          '    OR female_team_id IN (SELECT id FROM teams WHERE leader_id IN (SELECT id FROM users WHERE auth_id = auth.uid()))\n' +
+          '  );'
+        );
+      }
+      throw error;
+    }
+    showToast('✅ 신청이 취소되었습니다');
     loadAndRenderRequests('sent');
   } catch(err) {
-    showToast('❌ 취소 실패: ' + err.message);
+    showToast('❌ 취소 실패: ' + err.message, 6000);
   }
 }
 window.cancelApply = cancelApply;
@@ -3342,34 +3282,85 @@ async function openAdminUserDetail(userId) {
     .eq('id', userId).single();
   if (!u) return;
 
-  const v = u.student_verifications?.[0] || {};
-  const d = u.deposits?.[0] || {};
+  const v   = u.student_verifications?.[0] || {};
+  const d   = u.deposits?.[0] || {};
   const age = u.birth_year ? new Date().getFullYear() - u.birth_year + 1 : '-';
 
+  // 팀 정보도 조회
+  const { data: myTeam } = await _sb
+    .from('teams').select('id, title, status, contact_phone, contact_kakao, team_pin, created_at')
+    .eq('leader_id', userId).maybeSingle();
+
   document.getElementById('admin-user-modal-body').innerHTML = `
-    <div style="background:var(--pink-soft);border-radius:var(--radius);padding:20px;margin-bottom:16px;text-align:center;">
-      <div style="font-size:20px;font-weight:700;margin-bottom:4px;">${esc(u.nickname||'-')}</div>
-      <div style="font-size:13px;color:var(--gray-600);">@${esc(u.username||'-')}</div>
+    <!-- 프로필 헤더 -->
+    <div style="background:linear-gradient(135deg,var(--pink),var(--purple));
+      border-radius:var(--radius);padding:20px;margin-bottom:16px;text-align:center;color:white;">
+      <div style="font-size:24px;font-weight:800;margin-bottom:4px;">${esc(u.nickname||'-')}</div>
+      <div style="font-size:13px;opacity:0.85;">@${esc(u.username||'-')}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;">
+        <span class="chip" style="background:rgba(255,255,255,0.2);color:white;font-size:11px;">
+          ${u.gender==='male'?'👨 남성':'👩 여성'}
+        </span>
+        <span class="chip" style="background:rgba(255,255,255,0.2);color:white;font-size:11px;">
+          ${u.profile_active ? '✅ 활성' : '⏳ 대기'}
+        </span>
+        ${u.is_banned ? '<span class="chip" style="background:#B71C1C;color:white;font-size:11px;">🚫 차단됨</span>' : ''}
+      </div>
     </div>
-    <div style="background:white;border-radius:var(--radius-sm);border:1px solid var(--gray-100);overflow:hidden;margin-bottom:12px;">
-      <div style="padding:10px 14px;background:var(--gray-50);font-size:12px;font-weight:700;color:var(--gray-600);">📋 공개 프로필</div>
-      ${iRow('🏫 대학교', esc(u.university||'-'))}
-      ${iRow('📚 학과', esc(u.department||'-'))}
-      ${iRow('🎂 나이', esc(String(age))+'세')}
-      ${iRow('🧬 MBTI', esc(u.mbti||'-'))}
-      ${iRow('🚬 흡연', u.smoking?'흡연':'비흡연')}
+
+    <!-- 기본 정보 -->
+    <div style="background:white;border-radius:var(--radius-sm);border:1px solid var(--gray-100);
+      overflow:hidden;margin-bottom:12px;">
+      <div style="padding:10px 14px;background:var(--gray-50);font-size:12px;font-weight:700;
+        color:var(--gray-600);">📋 기본 정보</div>
+      ${iRow('🏫 대학교',    esc(u.university||'-'))}
+      ${iRow('📚 학과',      esc(u.department||'-'))}
+      ${iRow('🎂 출생연도',  u.birth_year ? u.birth_year+'년생 ('+age+'세)' : '-')}
+      ${iRow('🧬 MBTI',      esc(u.mbti||'-'))}
+      ${iRow('🚬 흡연',      u.smoking ? '🚬 흡연' : '🚭 비흡연')}
+      ${u.bio ? iRow('📝 자기소개', esc(u.bio)) : ''}
+      ${u.custom_badge ? iRow('🏷️ 역할뱃지', esc(u.custom_badge)) : ''}
     </div>
-    <div style="background:white;border-radius:var(--radius-sm);border:1.5px solid var(--navy);overflow:hidden;margin-bottom:12px;">
-      <div style="padding:10px 14px;background:var(--navy);font-size:12px;font-weight:700;color:rgba(255,255,255,0.8);">🔐 관리자 전용</div>
-      ${iRow('🆔 학번', esc(u.student_number||'-'))}
-      ${iRow('📞 전화번호', esc(u.phone_number||'-'))}
-      ${iRow('📅 가입일', u.created_at ? new Date(u.created_at).toLocaleString('ko-KR') : '-')}
-      ${d.depositor_name ? iRow('💳 입금자명', esc(d.depositor_name)) : ''}
-      ${d.amount ? iRow('💰 입금액', d.amount.toLocaleString()+'원') : ''}
-      ${iRow('🎓 인증상태', {pending:'⏳ 검토중',approved:'✅ 승인',rejected:'❌ 반려'}[v.status]||'미제출')}
+
+    <!-- 관리자 전용 개인정보 -->
+    <div style="background:white;border-radius:var(--radius-sm);border:1.5px solid var(--navy);
+      overflow:hidden;margin-bottom:12px;">
+      <div style="padding:10px 14px;background:var(--navy);font-size:12px;font-weight:700;
+        color:rgba(255,255,255,0.85);">🔐 개인정보 (관리자 전용)</div>
+      ${iRow('🆔 학번',      esc(u.student_number||'-'))}
+      ${iRow('📞 전화번호',  esc(u.phone_number||'-'))}
+      ${iRow('📅 가입일',    u.created_at ? new Date(u.created_at).toLocaleString('ko-KR') : '-')}
+      ${iRow('🔑 Auth UID',  `<span style="font-size:10px;word-break:break-all;">${esc(u.auth_id||'-')}</span>`)}
+      ${iRow('📢 마케팅 동의', u.marketing_agree ? '✅ 동의' : '❌ 미동의')}
+    </div>
+
+    <!-- 서비스 상태 -->
+    <div style="background:white;border-radius:var(--radius-sm);border:1px solid var(--gray-100);
+      overflow:hidden;margin-bottom:12px;">
+      <div style="padding:10px 14px;background:var(--gray-50);font-size:12px;font-weight:700;
+        color:var(--gray-600);">📊 서비스 상태</div>
+      ${iRow('🎓 인증상태',  {pending:'⏳ 검토중',approved:'✅ 승인',rejected:'❌ 반려'}[v.status]||'미제출')}
       ${v.reject_reason ? iRow('❌ 반려사유', esc(v.reject_reason)) : ''}
-      ${iRow('📛 서비스 상태', u.profile_active ? '✅ 활성' : '⏳ 대기')}
+      ${iRow('💳 입금상태',  {pending_confirm:'⏳ 확인대기',confirmed:'✅ 완료',rejected:'❌ 반려'}[d.status]||'미입금')}
+      ${d.depositor_name ? iRow('💳 입금자명',  esc(d.depositor_name)) : ''}
+      ${d.amount         ? iRow('💰 입금액',    d.amount.toLocaleString()+'원') : ''}
+      ${iRow('🔓 서비스 활성', u.profile_active ? '✅ 활성화' : '⏳ 비활성')}
     </div>
+
+    <!-- 팀 정보 -->
+    ${myTeam ? `
+    <div style="background:white;border-radius:var(--radius-sm);border:1px solid var(--gray-100);
+      overflow:hidden;margin-bottom:12px;">
+      <div style="padding:10px 14px;background:var(--gray-50);font-size:12px;font-weight:700;
+        color:var(--gray-600);">👥 등록 팀</div>
+      ${iRow('📛 팀 이름',    esc(myTeam.title||'-'))}
+      ${iRow('📊 팀 상태',    {recruiting:'🟢 모집중',matched:'🎉 매칭완료',hidden:'⚫ 숨김'}[myTeam.status]||myTeam.status||'-')}
+      ${myTeam.contact_phone ? iRow('📞 팀 연락처', esc(myTeam.contact_phone)) : ''}
+      ${myTeam.contact_kakao ? iRow('💛 카카오 ID', esc(myTeam.contact_kakao)) : ''}
+      ${iRow('📅 팀 등록일', myTeam.created_at ? new Date(myTeam.created_at).toLocaleDateString('ko-KR') : '-')}
+    </div>` : ''}
+
+    <!-- 관리 버튼 -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
       ${!u.is_banned
         ? `<button class="btn btn-danger btn-sm" onclick="adminBanUser('${esc(u.id)}',null)">🚫 이용 제한</button>`
@@ -3378,7 +3369,8 @@ async function openAdminUserDetail(userId) {
         ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">⏸️ 비활성화</button>`
         : `<button class="btn btn-secondary btn-sm" onclick="adminActivateUser('${esc(u.id)}')">▶️ 활성화</button>`}
     </div>
-    <button class="btn btn-danger btn-sm" style="width:100%;margin-bottom:8px;background:#B71C1C;"
+    <button class="btn btn-danger btn-sm"
+      style="width:100%;margin-bottom:8px;background:#B71C1C;"
       onclick="adminDeleteUser('${esc(u.id)}')">🗑️ 회원 완전 삭제</button>
     <button class="btn btn-outline btn-sm" style="width:100%;"
       onclick="closeModal('modal-admin-user')">닫기</button>`;
@@ -3945,44 +3937,11 @@ window.toggleAll = toggleAll;
         <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
           placeholder="010-0000-0000" maxlength="15" autocomplete="off">
       </div>
-      <div class="form-group" style="margin-bottom:10px;">
+      <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
         <input class="form-input" type="text" id="contact-kakao" style="height:48px;"
           placeholder="카카오톡 아이디 입력" maxlength="50" autocomplete="off">
       </div>
-      <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label">팀 PIN <span class="required">*</span>
-          <span style="font-size:11px;color:var(--gray-400);font-weight:400;"> — 숫자 4자리, 팀 불러오기에 사용</span>
-        </label>
-        <input class="form-input" type="number" id="team-pin"
-          style="height:48px;font-size:20px;letter-spacing:8px;font-weight:700;"
-          placeholder="0000" maxlength="4" min="0" max="9999" autocomplete="off">
-        <p class="form-hint">⚠️ PIN을 잊으면 팀을 불러올 수 없습니다. 메모해두세요!</p>
-      </div>
-    </div>
-
-    <!-- 팀 불러오기 섹션 -->
-    <div class="card card-p" style="margin-bottom:12px;background:var(--gray-50);">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">🔑 기존 팀 불러오기</div>
-      <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        이전에 등록한 팀이 있다면 팀 이름과 PIN으로 불러올 수 있어요.
-      </div>
-      <div class="form-group" style="margin-bottom:8px;">
-        <label class="form-label">팀 이름</label>
-        <input class="form-input" type="text" id="load-team-title" style="height:44px;"
-          placeholder="등록한 팀 이름 입력" maxlength="100">
-      </div>
-      <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">PIN 4자리</label>
-        <input class="form-input" type="text" id="load-team-pin" style="height:44px;"
-          placeholder="0000" maxlength="4" inputmode="numeric" pattern="\d{4}"
-          style="height:44px;letter-spacing:8px;font-size:20px;font-weight:700;text-align:center;">
-      </div>
-      <button class="btn btn-secondary btn-sm" id="btn-load-team"
-        onclick="loadTeamByCode()" style="width:100%;height:44px;">
-        🔑 팀 불러오기
-      </button>
-      <div id="load-team-preview"></div>
     </div>
 
     <!-- 인증 안내 배너 -->
