@@ -2080,13 +2080,9 @@ async function loadAndRenderRequests(tab) {
                <button class="btn btn-outline btn-sm" style="flex:1;"
                 onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`
             : ''}
-          ${r.status === 'pending' && tab === 'sent'
-            ? `<button class="btn btn-danger btn-sm" style="flex:1;"
-                onclick="cancelApply('${esc(r.id)}')">🚫 신청 취소</button>`
-            : ''}
-          ${!isMatched && !isPendingRecv && !(r.status === 'pending' && tab === 'sent')
+          ${!isMatched && !isPendingRecv
             ? `<button class="btn btn-outline btn-sm"
-                onclick="switchTab('messages')">💬 채팅</button>`
+                onclick="switchTab('messages')">💬 후기</button>`
             : ''}
         </div>
       </div>`;
@@ -2304,35 +2300,6 @@ async function rejectMatchRequest(requestId) {
   }
 }
 window.rejectMatchRequest = rejectMatchRequest;
-
-// 과팅 신청 취소 (보낸 신청 취소)
-async function cancelApply(requestId) {
-  if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
-  if (!confirm('신청을 취소하시겠습니까?')) return;
-  try {
-    const { error } = await _sb.from('match_requests')
-      .delete().eq('id', requestId);
-    if (error) {
-      if (error.code === '42501' || error.message?.includes('row-level security')) {
-        throw new Error(
-          'RLS 정책 오류 — Supabase SQL Editor에서 실행:\n' +
-          'DROP POLICY IF EXISTS "match_requests_delete_own" ON match_requests;\n' +
-          'CREATE POLICY "match_requests_delete_own" ON match_requests\n' +
-          '  FOR DELETE USING (\n' +
-          '    male_team_id IN (SELECT id FROM teams WHERE leader_id IN (SELECT id FROM users WHERE auth_id = auth.uid()))\n' +
-          '    OR female_team_id IN (SELECT id FROM teams WHERE leader_id IN (SELECT id FROM users WHERE auth_id = auth.uid()))\n' +
-          '  );'
-        );
-      }
-      throw error;
-    }
-    showToast('✅ 신청이 취소되었습니다');
-    loadAndRenderRequests('sent');
-  } catch(err) {
-    showToast('❌ 취소 실패: ' + err.message, 6000);
-  }
-}
-window.cancelApply = cancelApply;
 
 // ============================================================
 // 25. 메시지 — 상대팀 선택 + 고정 메시지
@@ -2864,7 +2831,8 @@ async function switchAdminTab(tab, el) {
     const { data: users, error } = await _sb
       .from('users')
       .select('*, student_verifications!student_verifications_user_id_fkey(status), deposits!deposits_user_id_fkey(status,amount,depositor_name)')
-      .is('deleted_at', null)
+      .is('deleted_at', null)          // 삭제된 회원 제외
+      .not('username', 'like', '__del_%')  // 비활성화된 회원 제외
       .order('created_at', { ascending: false });
 
     if (error) { container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">${esc(error.message)}</div></div>`; return; }
@@ -2948,7 +2916,7 @@ async function switchAdminTab(tab, el) {
   if (tab === 'deposit') {
     const { data: deposits, error: depositListErr } = await _sb
       .from('deposits')
-      .select('*, users!deposits_user_id_fkey(id,nickname,username,gender)')
+      .select('*, users!deposits_user_id_fkey(id,nickname,username,gender,deleted_at)')
       .order('created_at', { ascending: false });
 
     if (depositListErr) {
@@ -2958,15 +2926,18 @@ async function switchAdminTab(tab, el) {
       return;
     }
 
+    // deleted_at 있는 유저의 입금 내역 제외
+    const activeDeposits = (deposits||[]).filter(d => !d.users?.deleted_at);
+
     container.innerHTML = `
       <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">💳 입금 관리</div>
       <div style="padding:8px 16px;background:#FFF9E7;font-size:12px;color:#795548;">
         ⚠️ ${esc(cfg.BANK_NAME)} ${esc(cfg.BANK_ACCOUNT)} (예금주: ${esc(cfg.BANK_HOLDER)}) 확인 후 처리하세요
       </div>
       <div class="menu-list">
-        ${(deposits||[]).length === 0
+        ${activeDeposits.length === 0
           ? '<div class="empty-state"><div class="empty-icon">💳</div><div class="empty-title">입금 요청 없음</div></div>'
-          : (deposits||[]).map(d => `
+          : activeDeposits.map(d => `
             <div class="admin-list-item">
               <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
                 <div>
@@ -3564,61 +3535,53 @@ window.adminDeleteReview = adminDeleteReview;
 async function adminDeleteUser(userId) {
   try { assertAdmin(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
-  if (!confirm('⚠️ 이 회원을 완전히 삭제하시겠습니까?\n\n' +
-    '• 회원 데이터, 팀, 신청내역, 입금 내역이 모두 삭제됩니다\n' +
+  if (!confirm('⚠️ 이 회원을 삭제하시겠습니까?\n\n' +
+    '• 팀, 신청내역, 입금 내역이 모두 제거됩니다\n' +
     '• 이 작업은 되돌릴 수 없습니다')) return;
 
-  const ignore = async (promise) => {
-    try { await promise; } catch(e) { console.warn('[adminDelete]', e.message); }
-  };
+  const ignore = async (p) => { try { await p; } catch(e) { console.warn('[adminDel]', e.message); } };
 
-  // 버튼 로딩
   const btn = event?.target;
-  if (btn) { btn.disabled = true; btn.textContent = '삭제 중...'; }
+  if (btn) { btn.disabled = true; btn.textContent = '처리 중...'; }
 
   try {
-    // STEP 1: 팀 목록 수집
+    // STEP 1: 팀 관련 데이터 삭제
     const { data: myTeams } = await _sb.from('teams').select('id').eq('leader_id', userId);
     const teamIds = (myTeams || []).map(t => t.id);
-
-    // STEP 2: FK 순서대로 자식 테이블 삭제
     if (teamIds.length) {
       await ignore(_sb.from('match_requests').delete().in('male_team_id',   teamIds));
       await ignore(_sb.from('match_requests').delete().in('female_team_id', teamIds));
       await ignore(_sb.from('team_members').delete().in('team_id', teamIds));
       await ignore(_sb.from('teams').delete().in('id', teamIds));
     }
+
+    // STEP 2: 사용자 관련 데이터 삭제
     await ignore(_sb.from('student_verifications').delete().eq('user_id', userId));
     await ignore(_sb.from('deposits').delete().eq('user_id', userId));
     await ignore(_sb.from('terms_consents').delete().eq('user_id', userId));
     await ignore(_sb.from('reports').delete().eq('reporter_id', userId));
     await ignore(_sb.from('reviews').delete().eq('user_id', userId));
 
-    // STEP 3: users 행 삭제 시도
+    // STEP 3: users 행 완전 삭제 시도
     const { error: delErr } = await _sb.from('users').delete().eq('id', userId);
 
     if (delErr) {
-      // RLS로 삭제 불가 → 완전 비활성화로 폴백 (재로그인 불가, 노출 안 됨)
-      console.warn('[adminDeleteUser] users DELETE 실패, 비활성화로 대체:', delErr.message);
-      const { error: deactErr } = await _sb.from('users').update({
-        deleted_at:      new Date().toISOString(),
-        profile_active:  false,
-        is_banned:       true,
-        username:        `__deleted_${Date.now()}`,  // 아이디 충돌 방지
+      // 완전 삭제 실패 → 완전 비활성화 (모든 목록/카운트에서 자동 제외)
+      // deleted_at IS NOT NULL → 회원목록·홈통계·입금목록 모두 필터링됨
+      const deletedUsername = `__del_${Date.now()}`;
+      const { error: softErr } = await _sb.from('users').update({
+        deleted_at:     new Date().toISOString(),
+        profile_active: false,
+        is_banned:      true,
+        username:       deletedUsername,   // 아이디 재사용 방지
       }).eq('id', userId);
 
-      if (deactErr) {
-        throw new Error(
-          '삭제 및 비활성화 모두 실패했습니다.\n' +
-          'Supabase SQL Editor에서 아래 SQL을 실행해주세요:\n\n' +
-          'CREATE POLICY "users_admin_delete" ON users FOR DELETE USING (\n' +
-          '  EXISTS (SELECT 1 FROM users WHERE auth_id = auth.uid() AND role = \'admin\')\n' +
-          ');'
-        );
+      if (softErr) {
+        throw new Error('삭제 실패: ' + softErr.message + '\n\nSupabase SQL Editor에서 아래를 실행하면 완전 삭제가 됩니다:\nCREATE POLICY "users_admin_delete" ON users FOR DELETE USING (EXISTS (SELECT 1 FROM users WHERE auth_id = auth.uid() AND role = \'admin\'));');
       }
-      showToast('⚠️ 회원이 완전 비활성화되었습니다. (DB 정책 추가 시 완전 삭제 가능)');
+      showToast('✅ 회원이 비활성화되었습니다 (모든 목록에서 제외됨)');
     } else {
-      showToast('🗑️ 회원이 삭제되었습니다');
+      showToast('🗑️ 회원이 완전 삭제되었습니다');
     }
 
     await writeAdminLog('user_delete', 'users', userId);
@@ -3626,7 +3589,7 @@ async function adminDeleteUser(userId) {
     switchAdminTab('users', null);
 
   } catch(err) {
-    showToast('❌ 삭제 오류: ' + err.message, 6000);
+    showToast('❌ ' + err.message, 6000);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🗑️ 회원 완전 삭제'; }
   }
@@ -3926,11 +3889,11 @@ window.toggleAll = toggleAll;
   }
 
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
-    <!-- 연락처 + PIN 섹션 -->
+    <!-- 연락처 섹션 -->
     <div class="card card-p" style="margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처 & 팀 PIN</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        연락처는 매칭 성사 시 상대팀에게만 공개됩니다. PIN은 나중에 팀을 불러올 때 사용합니다.
+        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
         <label class="form-label">전화번호</label>
