@@ -1014,7 +1014,8 @@ async function submitVerification() {
       profile = existingProfile;
       console.info('[SV] 기존 프로필 재사용:', profile.id);
     } else {
-      // phone_number, custom_badge 컬럼 확정 — 항상 포함
+      // ★ phone_number는 users 테이블에 컬럼이 없을 수 있으므로
+      //   payload를 동적으로 구성해 컬럼이 있을 때만 포함
       const insertPayload = {
         auth_id:         signUpUid,
         username:        d.username,
@@ -1029,30 +1030,27 @@ async function submitVerification() {
         mbti:            d.mbti,
         bio:             d.bio,
         marketing_agree: d.marketing_agree,
-        profile_active:  false,
-        phone_number:    d.phone_number || null,
-        custom_badge:    d.custom_badge || null
+        profile_active:  false
       };
+      // phone_number, custom_badge 컬럼 확정 — 항상 포함
+      insertPayload.phone_number = d.phone_number || null;
+      insertPayload.custom_badge = d.custom_badge || null;
 
       let newP, profileErr;
       ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
 
-      // schema cache 오류 시 optional 컬럼 제거 후 재시도 + 별도 UPDATE
+      // ★ 컬럼 없음(PGRST204) 또는 schema cache 오류 → 선택 컬럼 제거 후 재시도
       const isMissingCol = (e) =>
         e?.code === 'PGRST204' ||
         e?.message?.includes('schema cache') ||
         e?.message?.includes('Could not find');
 
       if (profileErr && isMissingCol(profileErr)) {
-        console.warn('[SV] 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
+        console.warn('[SV] 선택 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
+        // custom_badge, phone_number 제거 후 재시도
         delete insertPayload.custom_badge;
         delete insertPayload.phone_number;
         ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
-        // INSERT 성공 후 phone_number UPDATE로 저장
-        if (!profileErr && newP && d.phone_number) {
-          await _sb.from('users').update({ phone_number: d.phone_number }).eq('id', newP.id);
-          newP.phone_number = d.phone_number;
-        }
       }
 
       if (profileErr) {
@@ -1919,7 +1917,7 @@ async function submitApply() {
 
     const message = document.getElementById('apply-message')?.value.trim() || '';
 
-    // ★ 규칙: female_team_id=신청자팀, male_team_id=피신청자팀 (성별 무관)
+    // ★ 규칙: female_team_id=신청자팀, male_team_id=피신청자팀
     const insertData = {
       status: 'pending', created_at: new Date().toISOString(),
       female_team_id: myTeam.id, male_team_id: targetTeamId
@@ -1979,7 +1977,6 @@ async function loadAndRenderRequests(tab) {
     const STATUS_LABEL = { pending:'⏳ 검토 대기', reviewing:'🔍 검토중', accepted:'✅ 수락', rejected:'❌ 거절', matched:'🎉 매칭완료', expired:'만료' };
     const STATUS_CLS   = { pending:'chip-orange', reviewing:'chip-purple', accepted:'chip-green', rejected:'chip-red', matched:'chip-green', expired:'chip-gray' };
     let data, error;
-    // ★ 규칙: female_team_id=신청자, male_team_id=피신청자
     if (tab === 'sent') {
       ({ data, error } = await _sb.from('match_requests')
         .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
@@ -2178,18 +2175,21 @@ window.saveMatchContact = saveMatchContact;
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
+    // STEP1: 양쪽 팀 ID 파악 (status 변경 전)
     const { data: reqBefore } = await _sb.from('match_requests')
       .select('male_team_id, female_team_id').eq('id', requestId).maybeSingle();
     if (!reqBefore) { showToast('❌ 신청 정보를 찾을 수 없습니다.'); return; }
 
+    // STEP2: 내 팀
     const { data: myTeam } = await _sb.from('teams').select('id')
       .eq('leader_id', state.profile?.id)
       .order('created_at', { ascending: false }).limit(1).maybeSingle();
 
+    // STEP3: 상대팀 ID
     const opponentTeamId = myTeam?.id === reqBefore.male_team_id
       ? reqBefore.female_team_id : reqBefore.male_team_id;
 
-    // ★ status 변경 전에 연락처 먼저 조회
+    // STEP4: ★ 연락처 먼저 조회 (status 바꾸기 전 — 바꾸면 RLS 막힘)
     let preloaded = null;
     if (opponentTeamId) {
       const { data: oppTeam } = await _sb.from('teams')
@@ -2198,7 +2198,6 @@ async function acceptMatchRequest(requestId) {
       if (oppTeam) {
         let phone = oppTeam.contact_phone || '';
         const kakao = oppTeam.contact_kakao || '';
-        // contact_phone 없으면 리더 phone_number 사용
         if (!phone && oppTeam.leader_id) {
           const { data: leader } = await _sb.from('users')
             .select('phone_number').eq('id', oppTeam.leader_id).maybeSingle();
@@ -2208,13 +2207,17 @@ async function acceptMatchRequest(requestId) {
       }
     }
 
+    // STEP5: match_request → matched
     const { error: reqErr } = await _sb.from('match_requests')
       .update({ status: 'matched', responded_at: new Date().toISOString() }).eq('id', requestId);
     if (reqErr) throw reqErr;
 
+    // STEP6: 양쪽 팀 모두 숨김 (status=matched, is_visible=false)
     const teamIds = [reqBefore.male_team_id, reqBefore.female_team_id].filter(Boolean);
     if (teamIds.length > 0) {
-      await _sb.from('teams').update({ status: 'matched', is_visible: false }).in('id', teamIds);
+      const { error: hideErr } = await _sb.from('teams')
+        .update({ status: 'matched', is_visible: false }).in('id', teamIds);
+      if (hideErr) console.warn('[accept] 팀 숨김 오류:', hideErr.message);
     }
 
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
