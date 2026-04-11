@@ -1869,6 +1869,7 @@
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('teams',this)">👥 팀관리</button>
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('reports',this)">🚨 신고</button>
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('reviews',this)">✏️ 후기관리</button>
+      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('deactivated',this)">🚫 비활성 회원</button>
     </div>
 
     <div class="scroll-content" id="admin-content">
@@ -1923,7 +1924,7 @@
         <div style="background:var(--gray-50);border:1px solid var(--gray-200);
           border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;text-align:left;">
           <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px;">신고 접수 이메일</div>
-          <div style="font-size:16px;font-weight:700;color:var(--pink);">john_1217@naver.com</div>
+          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="1f75707771402e2d2e285f717e697a6d317c7072">[email&#160;protected]</a></div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:6px;line-height:1.6;">
             • 신고 유형 (허위 프로필 / 욕설 / 성희롱 / 기타)<br>
             • 신고 내용을 상세히 작성해 보내주세요<br>
@@ -2124,9 +2125,4 @@
   </div>
 
   </div><!-- #app end -->
-  <div id="toast" aria-live="polite" aria-atomic="true"></div>
-
-<!-- ③ 메인 앱 스크립트 -->
-<script src="./app.js"></script>
-</body>
-</html>
+  <div id="toast" aria-live=
