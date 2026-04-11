@@ -1467,9 +1467,8 @@
           const team = _cachedTeams.find(t => t.id === window._currentDetailTeamId);
           if (!team) { showToast('팀 정보를 찾을 수 없습니다.'); return; }
           const pg = state.profile.gender;
-          const tg = team.gender;
-          if (pg === 'male' && tg !== 'female') { showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return; }
-          if (pg === 'female' && tg !== 'male') { showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return; }
+          if (pg === 'male') { showToast('❌ 남성팀은 신청을 받는 구조입니다. 여성팀의 신청을 기다려주세요.'); return; }
+          if (pg === 'female' && team.gender !== 'male') { showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return; }
           openApplyScreen(window._currentDetailTeamId);
         ">💌 과팅 신청하기</button>
       </div>
@@ -1923,7 +1922,7 @@
         <div style="background:var(--gray-50);border:1px solid var(--gray-200);
           border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;text-align:left;">
           <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px;">신고 접수 이메일</div>
-          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="1f75707771402e2d2e285f717e697a6d317c7072">[email&#160;protected]</a></div>
+          <div style="font-size:16px;font-weight:700;color:var(--pink);">john_1217@naver.com</div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:6px;line-height:1.6;">
             • 신고 유형 (허위 프로필 / 욕설 / 성희롱 / 기타)<br>
             • 신고 내용을 상세히 작성해 보내주세요<br>
