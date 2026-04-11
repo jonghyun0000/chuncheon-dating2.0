@@ -1985,9 +1985,15 @@ async function loadAndRenderRequests(tab) {
   container.innerHTML = '<div style="text-align:center;padding:24px;"><div class="spinner"></div></div>';
 
   try {
-    // 내 팀 조회
-    const { data: myTeam } = await _sb.from('teams')
-      .select('id').eq('leader_id', state.profile?.id).single();
+    // 내 팀 조회 — maybeSingle + limit 1 (single() 대신)
+    const { data: myTeam, error: teamErr } = await _sb.from('teams')
+      .select('id')
+      .eq('leader_id', state.profile?.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (teamErr) throw teamErr;
 
     if (!myTeam) {
       container.innerHTML = `<div class="empty-state">
@@ -2012,43 +2018,33 @@ async function loadAndRenderRequests(tab) {
     const gender  = profile?.gender;
 
     if (tab === 'sent') {
-      // 내가 보낸 신청 = 내 팀이 신청자 측
-      // 여성팀이 남성팀에게 신청 → female_team_id = 내 팀
-      // 남성팀이 여성팀에게 신청 → male_team_id = 내 팀
+      // 보낸 신청 = 내가 신청자
+      // 여성이 신청 → female_team_id = 내팀 / 남성이 신청 → male_team_id = 내팀
       if (gender === 'female') {
         ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
+          .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
           .eq('female_team_id', myTeam.id)
           .order('created_at', { ascending: false }));
       } else {
         ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .select('*, male_team_id, female_team_id, teams!match_requests_female_team_id_fkey(title,university)')
           .eq('male_team_id', myTeam.id)
           .order('created_at', { ascending: false }));
       }
     } else {
-      // 받은 신청 = 상대팀이 내 팀에게 신청한 것 = 반대 컬럼이 내 팀
-      // 내가 남성팀 → 여성팀이 나에게 신청 → female_team_id는 상대, male_team_id = 내 팀
-      //   BUT: 이 경우 내가 보낸 것도 male_team_id=내팀이므로 구분 불가
-      //   → 실제 서비스 로직: 여성이 남성에게 신청하는 구조
-      //   → 남성 received = female_team_id = 상대가 신청자, male_team_id = 내팀
-      //   → 여성 received = 없음 (여성은 신청만 함)
+      // 받은 신청 = 상대가 신청자
+      // 남성팀이 받은 신청 → female_team_id = 상대(신청자), male_team_id = 내팀
+      // 여성팀이 받은 신청 → male_team_id = 상대(신청자), female_team_id = 내팀
       if (gender === 'male') {
-        // 남성팀이 받은 신청 = 여성팀이 신청한 것 → male_team_id = 내팀
-        // sent랑 같은 조건이지만 received는 status=pending인 것만 (아직 처리 안 된 것)
-        // 단, sent에서 이미 보여주므로 received는 "상대방이 보낸 신청"
-        // → 현재 구조상 남성 received와 sent가 동일 → received 탭을 숨기거나 
-        //   "받은 신청" = 여성팀(상대)이 신청한 건 = male_team_id=내팀 + status=pending
         ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .select('*, male_team_id, female_team_id, teams!match_requests_female_team_id_fkey(title,university)')
           .eq('male_team_id', myTeam.id)
-          .eq('status', 'pending')
           .order('created_at', { ascending: false }));
       } else {
-        // 여성팀이 받은 신청 = 없음 (여성이 신청하는 구조)
-        // 빈 배열 반환
-        data = [];
-        error = null;
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
+          .eq('female_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
       }
     }
 
@@ -2063,14 +2059,32 @@ async function loadAndRenderRequests(tab) {
     }
 
     container.innerHTML = data.map(r => {
-      const teamData = tab === 'sent' ? r.teams : r['teams'];
+      const teamData = r.teams;
       const teamName = teamData?.title || '-';
       const teamUniv = teamData?.university || '-';
       const label    = STATUS_LABEL[r.status] || r.status;
       const cls      = STATUS_CLS[r.status]   || 'chip-gray';
       const date     = new Date(r.created_at).toLocaleDateString('ko-KR');
-      const isMatched   = r.status === 'matched';
+      const isMatched     = r.status === 'matched';
       const isPendingRecv = r.status === 'pending' && tab === 'received';
+
+      // 상대팀 ID (연락처 보기용)
+      const oppTeamId = tab === 'received'
+        ? (gender === 'male' ? r.female_team_id : r.male_team_id)
+        : (gender === 'female' ? r.male_team_id : r.female_team_id);
+
+      let actionBtns = '';
+      if (isMatched) {
+        actionBtns = `<button class="btn btn-primary btn-sm" style="flex:1;"
+          onclick="showMatchContactDirect('${esc(r.id)}','${esc(oppTeamId||'')}')">🎉 연락처 보기</button>`;
+      } else if (isPendingRecv) {
+        actionBtns = `
+          <button class="btn btn-primary btn-sm" style="flex:1;"
+            onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
+          <button class="btn btn-danger btn-sm" style="flex:1;"
+            onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`;
+      }
+
       return `
       <div class="card card-p">
         <div style="display:flex;justify-content:space-between;margin-bottom:10px;">
@@ -2080,24 +2094,10 @@ async function loadAndRenderRequests(tab) {
           </div>
           <span class="chip ${cls}">${esc(label)}</span>
         </div>
-        <div style="display:flex;gap:8px;">
-          ${isMatched
-            ? `<button class="btn btn-primary btn-sm" style="flex:1;"
-                onclick="showMatchSuccess('${esc(r.id)}')">🎉 연결 정보 보기</button>`
-            : ''}
-          ${isPendingRecv
-            ? `<button class="btn btn-primary btn-sm" style="flex:1;"
-                onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
-               <button class="btn btn-outline btn-sm" style="flex:1;"
-                onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`
-            : ''}
-          ${!isMatched && !isPendingRecv
-            ? `<button class="btn btn-outline btn-sm"
-                onclick="switchTab('messages')">💬 후기</button>`
-            : ''}
-        </div>
+        ${actionBtns ? `<div style="display:flex;gap:8px;">${actionBtns}</div>` : ''}
       </div>`;
     }).join('');
+
   } catch(err) {
     container.innerHTML = `<div class="empty-state">
       <div class="empty-icon">⚠️</div>
