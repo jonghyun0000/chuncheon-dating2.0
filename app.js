@@ -1430,20 +1430,21 @@ function renderTeamList() {
       </div>`).join('');
 
     // 신청 버튼: 매칭완료 팀은 신청 불가
+    const myGender = (state.profile?.gender || '').toLowerCase().trim();
     let applyBtn = '';
     if (team.status === 'matched') {
       applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>🎉 매칭완료</button>`;
     } else if (isGuest) {
       applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showAuthGateModal('apply')">💌 신청하기</button>`;
     } else if (isMale) {
-      // 남성팀 카드: 여성만 신청 가능
-      if (state.profile?.gender === 'female') {
+      // 남성팀 카드: 여성 유저만 신청 가능
+      if (myGender === 'female') {
         applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
       } else {
         applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👨 남성팀 (신청 불가)</button>`;
       }
     } else {
-      // 여성팀 카드: 신청 불가 (남성은 신청받는 구조)
+      // 여성팀 카드: 신청 불가 (여성은 신청하는 구조, 자기 팀 포함 신청 안 됨)
       applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
     }
 
