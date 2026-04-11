@@ -1974,7 +1974,7 @@ async function loadAndRenderRequests(tab) {
   container.innerHTML = '<div style="text-align:center;padding:24px;"><div class="spinner"></div></div>';
 
   try {
-    // 내 팀 조회 — maybeSingle (single()은 결과 없으면 에러)
+    // 내 팀 조회 — maybeSingle (single()은 결과 없거나 여러개면 에러)
     const { data: myTeam, error: teamErr } = await _sb.from('teams')
       .select('id')
       .eq('leader_id', state.profile?.id)
@@ -2005,8 +2005,8 @@ async function loadAndRenderRequests(tab) {
     let data, error;
 
     // ★ 규칙: female_team_id = 신청자팀, male_team_id = 피신청자팀
-    // 보낸신청 = 내가 신청자 = female_team_id가 내 팀
-    // 받은신청 = 상대가 신청자 = male_team_id가 내 팀
+    // 보낸신청 = 내가 신청자 → female_team_id = 내팀 / 상대팀 이름은 male_team_id 쪽
+    // 받은신청 = 상대가 신청 → male_team_id = 내팀 / 상대팀 이름은 female_team_id 쪽
     if (tab === 'sent') {
       ({ data, error } = await _sb.from('match_requests')
         .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
@@ -2039,7 +2039,7 @@ async function loadAndRenderRequests(tab) {
       const isMatched     = r.status === 'matched';
       const isPendingRecv = r.status === 'pending' && tab === 'received';
 
-      // 상대팀 ID: 보낸신청→male_team_id가 상대, 받은신청→female_team_id가 상대
+      // 상대팀 ID: 보낸신청→male_team_id, 받은신청→female_team_id
       const oppTeamId = tab === 'sent' ? r.male_team_id : r.female_team_id;
 
       let actionBtns = '';
@@ -2076,6 +2076,7 @@ async function loadAndRenderRequests(tab) {
   }
 }
 window.loadAndRenderRequests = loadAndRenderRequests;
+
 // 탭 전환 버튼
 function switchRequestTab(tab) {
   const sent = document.getElementById('tab-sent');
@@ -2167,65 +2168,57 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
     .eq('id', opponentTeamId)
     .maybeSingle();
 
+  const phoneEl = document.getElementById('match-contact-phone');
+  const kakaoEl = document.getElementById('match-contact-kakao');
+
   if (oppTeam) {
     setText('match-success-team-name', oppTeam.title || '상대팀');
-    const phoneEl = document.getElementById('match-contact-phone');
     if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '미등록';
-    const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = oppTeam.contact_kakao || '미등록';
     window._matchContactPhone = oppTeam.contact_phone || '';
     window._matchContactKakao = oppTeam.contact_kakao || '';
     window._matchContactName  = oppTeam.title || '상대팀';
   } else {
-    const phoneEl = document.getElementById('match-contact-phone');
-    const kakaoEl = document.getElementById('match-contact-kakao');
-    if (phoneEl) phoneEl.textContent = '미등록 (관리자 문의)';
+    if (phoneEl) phoneEl.textContent = '미등록';
     if (kakaoEl) kakaoEl.textContent = '미등록';
   }
 }
 
-// 연락처 직접 표시 — 상대팀 ID를 알고 있을 때 바로 조회
+// 연락처 직접 표시 — oppTeamId를 알고 있으면 바로 조회
 async function showMatchContactDirect(requestId, oppTeamId) {
   showScreen('screen-match-success');
-
   const phoneEl = document.getElementById('match-contact-phone');
   const kakaoEl = document.getElementById('match-contact-kakao');
   if (phoneEl) phoneEl.textContent = '불러오는 중...';
   if (kakaoEl) kakaoEl.textContent = '불러오는 중...';
 
   try {
-    // oppTeamId가 유효하면 바로 조회
     if (oppTeamId && /^[0-9a-f-]{36}$/i.test(oppTeamId)) {
       await _fetchAndShowOpponentTeam(oppTeamId);
       return;
     }
-
-    // oppTeamId 없으면 requestId로 상대팀 찾기
+    // oppTeamId 없으면 requestId로 찾기
     const profile = state.profile;
     if (!profile) return;
-
     const { data: myTeam } = await _sb.from('teams')
       .select('id').eq('leader_id', profile.id)
       .order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (!myTeam) return;
-
     const { data: req } = await _sb.from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId).maybeSingle();
-
     const opponentId = req
       ? (myTeam.id === req.male_team_id ? req.female_team_id : req.male_team_id)
       : null;
-
-    if (opponentId) {
-      await _fetchAndShowOpponentTeam(opponentId);
-    } else {
-      if (phoneEl) phoneEl.textContent = '미등록 (관리자 문의)';
+    if (opponentId) await _fetchAndShowOpponentTeam(opponentId);
+    else {
+      if (phoneEl) phoneEl.textContent = '미등록';
       if (kakaoEl) kakaoEl.textContent = '미등록';
     }
   } catch(e) {
     console.warn('[showMatchContactDirect]', e.message);
-    if (phoneEl) phoneEl.textContent = '미등록 (관리자 문의)';
+    if (phoneEl) phoneEl.textContent = '미등록';
+    if (kakaoEl) kakaoEl.textContent = '미등록';
   }
 }
 window.showMatchContactDirect = showMatchContactDirect;
@@ -2261,12 +2254,14 @@ window.saveMatchContact = saveMatchContact;
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
-    // STEP 1: match_request에서 양쪽 팀 ID 파악 (업데이트 전에 먼저)
+    // STEP 1: 양쪽 팀 ID 파악 (status 변경 전에 먼저)
     const { data: reqBefore } = await _sb
       .from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId)
       .maybeSingle();
+
+    if (!reqBefore) { showToast('❌ 신청 정보를 찾을 수 없습니다.'); return; }
 
     // STEP 2: 내 팀 파악
     const { data: myTeam } = await _sb
@@ -2276,14 +2271,11 @@ async function acceptMatchRequest(requestId) {
       .limit(1).maybeSingle();
 
     // STEP 3: 상대팀 ID 결정
-    let opponentTeamId = null;
-    if (reqBefore && myTeam) {
-      opponentTeamId = myTeam.id === reqBefore.male_team_id
-        ? reqBefore.female_team_id
-        : reqBefore.male_team_id;
-    }
+    const opponentTeamId = myTeam?.id === reqBefore.male_team_id
+      ? reqBefore.female_team_id
+      : reqBefore.male_team_id;
 
-    // STEP 4: ★ 팀 status 변경 전에 상대팀 연락처 미리 조회 (status 바뀌면 RLS에 막힘)
+    // STEP 4: ★ 연락처 먼저 조회 (status 바꾸기 전에 — 바꾸면 RLS에 막힘)
     let preloaded = null;
     if (opponentTeamId) {
       const { data: oppTeam } = await _sb
@@ -2306,8 +2298,8 @@ async function acceptMatchRequest(requestId) {
     }).eq('id', requestId);
     if (reqErr) throw reqErr;
 
-    // STEP 6: 양쪽 팀 status → matched, is_visible → false
-    const teamIds = [reqBefore?.male_team_id, reqBefore?.female_team_id].filter(Boolean);
+    // STEP 6: 양쪽 팀 모두 status=matched, is_visible=false (홈에서 숨김)
+    const teamIds = [reqBefore.male_team_id, reqBefore.female_team_id].filter(Boolean);
     if (teamIds.length > 0) {
       await _sb.from('teams')
         .update({ status: 'matched', is_visible: false })
@@ -2315,7 +2307,6 @@ async function acceptMatchRequest(requestId) {
     }
 
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
-    // 미리 조회한 연락처 데이터 직접 전달
     await showMatchSuccess(requestId, preloaded);
     updateHomeStats();
   } catch(err) {
