@@ -1429,23 +1429,28 @@ function renderTeamList() {
         </div>
       </div>`).join('');
 
-    // 신청 버튼: 매칭완료 팀은 신청 불가
+    // 신청 버튼
     const myGender = (state.profile?.gender || '').toLowerCase().trim();
     let applyBtn = '';
     if (team.status === 'matched') {
       applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>🎉 매칭완료</button>`;
     } else if (isGuest) {
+      // 비로그인: 남녀 모두 신청하기 버튼 표시 (로그인 유도)
       applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showAuthGateModal('apply')">💌 신청하기</button>`;
     } else if (isMale) {
-      // 남성팀 카드: 여성 유저만 신청 가능
+      // 남성팀 카드: 여성만 신청 가능, 남성은 불가
       if (myGender === 'female') {
         applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
       } else {
         applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👨 남성팀 (신청 불가)</button>`;
       }
     } else {
-      // 여성팀 카드: 신청 불가 (여성은 신청하는 구조, 자기 팀 포함 신청 안 됨)
-      applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
+      // 여성팀 카드: 남성만 신청 가능, 여성은 불가
+      if (myGender === 'male') {
+        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
+      } else {
+        applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
+      }
     }
 
     return `
@@ -1895,9 +1900,9 @@ async function submitApply() {
     showToast('❌ 이미 매칭이 완료된 팀입니다.'); return;
   }
 
-  // 성별 교차 검증 — 여성만 신청 가능, 남성은 받는 구조
-  if (profile.gender === 'male') {
-    showToast('❌ 남성팀은 신청을 받는 구조입니다. 여성팀의 신청을 기다려주세요.'); return;
+  // 성별 교차 검증 — 반드시 상대 성별 팀에만 신청 가능
+  if (profile.gender === 'male' && targetTeam.gender !== 'female') {
+    showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return;
   }
   if (profile.gender === 'female' && targetTeam.gender !== 'male') {
     showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return;
@@ -1922,12 +1927,12 @@ async function submitApply() {
 
     const message = document.getElementById('apply-message')?.value.trim() || '';
 
-    // 신청자는 항상 여성팀 (female_team_id = 내팀, male_team_id = 상대팀)
+    // female_team_id = 여성팀, male_team_id = 남성팀 (신청자 성별 무관하게 역할로 구분)
     const insertData = {
       status: 'pending',
       created_at: new Date().toISOString(),
-      female_team_id: myTeam.id,      // 신청자(여성)
-      male_team_id:   targetTeamId    // 신청대상(남성)
+      female_team_id: profile.gender === 'female' ? myTeam.id : targetTeamId,
+      male_team_id:   profile.gender === 'male'   ? myTeam.id : targetTeamId
     };
     if (message) insertData.message = message;
 
@@ -2002,24 +2007,24 @@ async function loadAndRenderRequests(tab) {
     const gender  = profile?.gender;
 
     if (tab === 'sent') {
-      // 내가 보낸 신청 = 내가 신청자 측
-      // 서비스 구조: 여성팀이 남성팀에게 신청 (female_team_id = 신청자)
-      // → 여성: female_team_id = 내팀 (내가 보낸 것)
-      // → 남성: 보낸신청 없음 (남성은 신청받는 구조) → 빈 배열
+      // 내가 보낸 신청 = 내 팀이 신청자 측
+      // 여성이 신청 → female_team_id = 내팀
+      // 남성이 신청 → male_team_id = 내팀
       if (gender === 'female') {
         ({ data, error } = await _sb.from('match_requests')
           .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
           .eq('female_team_id', myTeam.id)
           .order('created_at', { ascending: false }));
       } else {
-        // 남성은 신청하지 않는 구조
-        data = [];
-        error = null;
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, male_team_id, female_team_id, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
       }
     } else {
       // 받은 신청 = 상대방이 나에게 신청한 것
-      // → 남성: female_team_id = 상대, male_team_id = 내팀 (여성이 나한테 신청)
-      // → 여성: 받은신청 없음 (여성은 신청하는 구조)
+      // 남성팀이 받은 신청 → female_team_id = 상대(신청자), male_team_id = 내팀
+      // 여성팀이 받은 신청 → male_team_id = 상대(신청자), female_team_id = 내팀
       if (gender === 'male') {
         ({ data, error } = await _sb.from('match_requests')
           .select('*, male_team_id, female_team_id, teams!match_requests_female_team_id_fkey(title,university)')
@@ -2027,8 +2032,11 @@ async function loadAndRenderRequests(tab) {
           .neq('female_team_id', myTeam.id)
           .order('created_at', { ascending: false }));
       } else {
-        data = [];
-        error = null;
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
+          .eq('female_team_id', myTeam.id)
+          .neq('male_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
       }
     }
 
@@ -2055,10 +2063,10 @@ async function loadAndRenderRequests(tab) {
       // 받은신청 탭 버튼 처리
       let actionBtns = '';
       if (isMatched) {
-        // 상대팀 ID 파악 (받은신청(남성): 신청자=여성팀, 보낸신청(여성): 상대=남성팀)
+        // 상대팀 ID: 내 팀이 아닌 쪽
         const oppTeamId = tab === 'received'
-          ? (r.female_team_id || '')
-          : (r.male_team_id || '');
+          ? (gender === 'male' ? r.female_team_id : r.male_team_id)   // 받은신청: 신청자가 상대
+          : (gender === 'female' ? r.male_team_id : r.female_team_id); // 보낸신청: 신청대상이 상대
         actionBtns = `<button class="btn btn-primary btn-sm" style="flex:1;"
           onclick="showMatchContactDirect('${esc(r.id)}','${esc(oppTeamId || '')}')">🎉 연락처 보기</button>`;
       } else if (tab === 'received' && r.status === 'pending') {
