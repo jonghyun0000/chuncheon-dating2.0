@@ -697,7 +697,7 @@ async function updateHomeStats() {
       // 매칭 성사 수 — teams.status = matched
       _sb.from('teams').select('id', { count:'exact', head:true })
         .eq('status','matched'),
-      // 남성 회원 — RLS 막힐 수 있으므로 실패해도 OK (is_deactivated 컬럼 없어도 동작)
+      // 남성 회원 — RLS 막힐 수 있으므로 실패해도 OK
       _sb.from('users').select('id', { count:'exact', head:true })
         .eq('gender','male').is('deleted_at',null),
       // 여성 회원
@@ -1429,24 +1429,20 @@ function renderTeamList() {
         </div>
       </div>`).join('');
 
-    // 신청 버튼
-    const myGender = (state.profile?.gender || '').toLowerCase().trim();
+    // 신청 버튼: 매칭완료 팀은 신청 불가
     let applyBtn = '';
     if (team.status === 'matched') {
       applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>🎉 매칭완료</button>`;
     } else if (isGuest) {
-      // 비로그인: 남녀 모두 신청하기 버튼 표시 (로그인 유도)
       applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showAuthGateModal('apply')">💌 신청하기</button>`;
     } else if (isMale) {
-      // 남성팀 카드: 여성만 신청 가능, 남성은 불가
-      if (myGender === 'female') {
+      if (state.profile?.gender === 'female') {
         applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
       } else {
         applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👨 남성팀 (신청 불가)</button>`;
       }
     } else {
-      // 여성팀 카드: 남성만 신청 가능, 여성은 불가
-      if (myGender === 'male') {
+      if (state.profile?.gender === 'male') {
         applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
       } else {
         applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
@@ -1669,11 +1665,7 @@ async function registerTeam() {
       }).select().single());
     }
 
-    if (teamErr) throw new Error('팀 등록 실패: ' + (
-      teamErr.message?.includes('row-level security')
-        ? '관리자 미승인 계정입니다 — ' + teamErr.message
-        : teamErr.message
-    ));
+    if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
 
     const memberRows = members.map(m => ({ ...m, team_id: team.id }));
     const { error: memberErr } = await _sb.from('team_members').insert(memberRows);
@@ -1808,16 +1800,16 @@ async function openApplyScreen(teamId) {
   showScreen('screen-apply');
 
   try {
-    // 내 팀 + 팀원 조회 (maybeSingle: 없으면 null, 에러 안 남)
+    // 내 팀 + 팀원 조회 (maybeSingle: 없으면 null, 에러 안 남 / limit 1로 중복 방지)
     const { data: myTeam, error } = await _sb.from('teams')
       .select('*, team_members(*)')
       .eq('leader_id', state.profile.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (error) {
-      // RLS 등 진짜 에러
-      if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">
-        팀 정보를 불러오지 못했습니다: ${esc(error.message)}</div>`;
+      if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">팀 조회 오류: ${esc(error.message)}</div>`;
       return;
     }
 
@@ -1874,7 +1866,7 @@ async function openApplyScreen(teamId) {
         </p>`;
     }
 
-    // 팀이 있으면 신청 버튼 표시 (팀원 0명이어도 일단 표시)
+    // 팀이 있으면 신청 버튼 표시
     if (submitBtn) submitBtn.style.display = 'block';
 
   } catch(err) {
@@ -1906,7 +1898,7 @@ async function submitApply() {
     showToast('❌ 이미 매칭이 완료된 팀입니다.'); return;
   }
 
-  // 성별 교차 검증 — 반드시 상대 성별 팀에만 신청 가능
+  // 성별 교차 검증 (남→여성팀 / 여→남성팀)
   if (profile.gender === 'male' && targetTeam.gender !== 'female') {
     showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return;
   }
@@ -1916,10 +1908,12 @@ async function submitApply() {
 
   setBtnLoading('btn-submit-apply', true, '💌 신청 완료');
   try {
-    // 내 팀 조회
+    // 내 팀 조회 (maybeSingle: 없으면 null, limit 1로 중복 방지)
     const { data: myTeam, error: teamErr } = await _sb.from('teams')
       .select('id')
       .eq('leader_id', profile.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (teamErr) {
@@ -1936,14 +1930,16 @@ async function submitApply() {
 
     const message = document.getElementById('apply-message')?.value.trim() || '';
 
-    // female_team_id = 여성팀, male_team_id = 남성팀 (신청자 성별 무관하게 역할로 구분)
-    const insertData = {
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      female_team_id: profile.gender === 'female' ? myTeam.id : targetTeamId,
-      male_team_id:   profile.gender === 'male'   ? myTeam.id : targetTeamId
-    };
+    const insertData = { status: 'pending', created_at: new Date().toISOString() };
     if (message) insertData.message = message;
+
+    if (profile.gender === 'male') {
+      insertData.male_team_id   = myTeam.id;
+      insertData.female_team_id = targetTeamId;
+    } else {
+      insertData.female_team_id = myTeam.id;
+      insertData.male_team_id   = targetTeamId;
+    }
 
     const { error } = await _sb.from('match_requests').insert(insertData);
 
@@ -2017,35 +2013,42 @@ async function loadAndRenderRequests(tab) {
 
     if (tab === 'sent') {
       // 내가 보낸 신청 = 내 팀이 신청자 측
-      // 여성이 신청 → female_team_id = 내팀
-      // 남성이 신청 → male_team_id = 내팀
+      // 여성팀이 남성팀에게 신청 → female_team_id = 내 팀
+      // 남성팀이 여성팀에게 신청 → male_team_id = 내 팀
       if (gender === 'female') {
         ({ data, error } = await _sb.from('match_requests')
-          .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
+          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
           .eq('female_team_id', myTeam.id)
           .order('created_at', { ascending: false }));
       } else {
         ({ data, error } = await _sb.from('match_requests')
-          .select('*, male_team_id, female_team_id, teams!match_requests_female_team_id_fkey(title,university)')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
           .eq('male_team_id', myTeam.id)
           .order('created_at', { ascending: false }));
       }
     } else {
-      // 받은 신청 = 상대방이 나에게 신청한 것
-      // 남성팀이 받은 신청 → female_team_id = 상대(신청자), male_team_id = 내팀
-      // 여성팀이 받은 신청 → male_team_id = 상대(신청자), female_team_id = 내팀
+      // 받은 신청 = 상대팀이 내 팀에게 신청한 것 = 반대 컬럼이 내 팀
+      // 내가 남성팀 → 여성팀이 나에게 신청 → female_team_id는 상대, male_team_id = 내 팀
+      //   BUT: 이 경우 내가 보낸 것도 male_team_id=내팀이므로 구분 불가
+      //   → 실제 서비스 로직: 여성이 남성에게 신청하는 구조
+      //   → 남성 received = female_team_id = 상대가 신청자, male_team_id = 내팀
+      //   → 여성 received = 없음 (여성은 신청만 함)
       if (gender === 'male') {
+        // 남성팀이 받은 신청 = 여성팀이 신청한 것 → male_team_id = 내팀
+        // sent랑 같은 조건이지만 received는 status=pending인 것만 (아직 처리 안 된 것)
+        // 단, sent에서 이미 보여주므로 received는 "상대방이 보낸 신청"
+        // → 현재 구조상 남성 received와 sent가 동일 → received 탭을 숨기거나 
+        //   "받은 신청" = 여성팀(상대)이 신청한 건 = male_team_id=내팀 + status=pending
         ({ data, error } = await _sb.from('match_requests')
-          .select('*, male_team_id, female_team_id, teams!match_requests_female_team_id_fkey(title,university)')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
           .eq('male_team_id', myTeam.id)
-          .neq('female_team_id', myTeam.id)
+          .eq('status', 'pending')
           .order('created_at', { ascending: false }));
       } else {
-        ({ data, error } = await _sb.from('match_requests')
-          .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
-          .eq('female_team_id', myTeam.id)
-          .neq('male_team_id', myTeam.id)
-          .order('created_at', { ascending: false }));
+        // 여성팀이 받은 신청 = 없음 (여성이 신청하는 구조)
+        // 빈 배열 반환
+        data = [];
+        error = null;
       }
     }
 
@@ -2060,33 +2063,14 @@ async function loadAndRenderRequests(tab) {
     }
 
     container.innerHTML = data.map(r => {
-      // Supabase 조인 결과는 'teams' 키로 반환됨
-      const teamData = r.teams;
+      const teamData = tab === 'sent' ? r.teams : r['teams'];
       const teamName = teamData?.title || '-';
       const teamUniv = teamData?.university || '-';
       const label    = STATUS_LABEL[r.status] || r.status;
       const cls      = STATUS_CLS[r.status]   || 'chip-gray';
       const date     = new Date(r.created_at).toLocaleDateString('ko-KR');
-      const isMatched = r.status === 'matched';
-
-      // 받은신청 탭 버튼 처리
-      let actionBtns = '';
-      if (isMatched) {
-        // 상대팀 ID: 내 팀이 아닌 쪽
-        const oppTeamId = tab === 'received'
-          ? (gender === 'male' ? r.female_team_id : r.male_team_id)   // 받은신청: 신청자가 상대
-          : (gender === 'female' ? r.male_team_id : r.female_team_id); // 보낸신청: 신청대상이 상대
-        actionBtns = `<button class="btn btn-primary btn-sm" style="flex:1;"
-          onclick="showMatchContactDirect('${esc(r.id)}','${esc(oppTeamId || '')}')">🎉 연락처 보기</button>`;
-      } else if (tab === 'received' && r.status === 'pending') {
-        // 받은신청 pending: 수락 / 거절 버튼
-        actionBtns = `
-          <button class="btn btn-primary btn-sm" style="flex:1;"
-            onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
-          <button class="btn btn-danger btn-sm" style="flex:1;"
-            onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`;
-      }
-
+      const isMatched   = r.status === 'matched';
+      const isPendingRecv = r.status === 'pending' && tab === 'received';
       return `
       <div class="card card-p">
         <div style="display:flex;justify-content:space-between;margin-bottom:10px;">
@@ -2097,7 +2081,20 @@ async function loadAndRenderRequests(tab) {
           <span class="chip ${cls}">${esc(label)}</span>
         </div>
         <div style="display:flex;gap:8px;">
-          ${actionBtns}
+          ${isMatched
+            ? `<button class="btn btn-primary btn-sm" style="flex:1;"
+                onclick="showMatchSuccess('${esc(r.id)}')">🎉 연결 정보 보기</button>`
+            : ''}
+          ${isPendingRecv
+            ? `<button class="btn btn-primary btn-sm" style="flex:1;"
+                onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
+               <button class="btn btn-outline btn-sm" style="flex:1;"
+                onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`
+            : ''}
+          ${!isMatched && !isPendingRecv
+            ? `<button class="btn btn-outline btn-sm"
+                onclick="switchTab('messages')">💬 후기</button>`
+            : ''}
         </div>
       </div>`;
     }).join('');
@@ -2127,64 +2124,6 @@ function switchRequestTab(tab) {
 window.switchRequestTab = switchRequestTab;
 
 // 매칭 성사 화면 표시 — 상대팀 정보를 직접 받아 표시
-// 연락처 직접 표시 — 상대팀 ID를 알고 있을 때 바로 조회
-async function showMatchContactDirect(requestId, oppTeamId) {
-  showScreen('screen-match-success');
-
-  // 로딩 표시
-  const phoneEl = document.getElementById('match-contact-phone');
-  const kakaoEl = document.getElementById('match-contact-kakao');
-  if (phoneEl) phoneEl.textContent = '불러오는 중...';
-  if (kakaoEl) kakaoEl.textContent = '불러오는 중...';
-
-  try {
-    // 상대팀 ID가 있으면 바로 조회
-    if (oppTeamId && /^[0-9a-f-]{36}$/i.test(oppTeamId)) {
-      await _fetchAndShowOpponentTeam(oppTeamId);
-      return;
-    }
-
-    // 없으면 내 팀으로 매칭 레코드에서 상대팀 찾기
-    const profile = state.profile;
-    if (!profile) return;
-    const { data: myTeam } = await _sb.from('teams').select('id').eq('leader_id', profile.id).single();
-    if (!myTeam) return;
-
-    const { data: req } = await _sb.from('match_requests')
-      .select('male_team_id, female_team_id')
-      .eq('id', requestId).single();
-
-    let opponentId = null;
-    if (req) {
-      opponentId = myTeam.id === req.male_team_id ? req.female_team_id : req.male_team_id;
-    }
-
-    if (!opponentId) {
-      // 최후 수단: matched 상태인 내 팀 관련 레코드에서 찾기
-      const { data: altReq } = await _sb.from('match_requests')
-        .select('male_team_id, female_team_id')
-        .or(`male_team_id.eq.${myTeam.id},female_team_id.eq.${myTeam.id}`)
-        .eq('status', 'matched')
-        .order('created_at', { ascending: false })
-        .limit(1).single();
-      if (altReq) {
-        opponentId = altReq.male_team_id === myTeam.id ? altReq.female_team_id : altReq.male_team_id;
-      }
-    }
-
-    if (opponentId) {
-      await _fetchAndShowOpponentTeam(opponentId);
-    } else {
-      if (phoneEl) phoneEl.textContent = '조회 실패 — 관리자에게 문의하세요';
-      if (kakaoEl) kakaoEl.textContent = '조회 실패';
-    }
-  } catch(e) {
-    console.warn('[showMatchContactDirect]', e.message);
-    if (phoneEl) phoneEl.textContent = '오류: ' + e.message;
-  }
-}
-window.showMatchContactDirect = showMatchContactDirect;
-
 async function showMatchSuccess(requestId, preloadedData) {
   showScreen('screen-match-success');
 
@@ -2775,8 +2714,8 @@ async function renderAdminDashboard() {
       _sb.from('teams').select('*', { count:'exact', head:true }).eq('gender', 'female').eq('status', 'recruiting'),
       _sb.from('matches').select('*', { count:'exact', head:true }),
       _sb.from('reports').select('*', { count:'exact', head:true }).eq('status', 'pending'),
-      // 확정된 입금 합계 (비활성 회원 제외)
-      _sb.from('deposits').select('amount, users!deposits_user_id_fkey(is_deactivated, deleted_at)').eq('status', 'confirmed'),
+      // 확정된 입금 합계
+      _sb.from('deposits').select('amount').eq('status', 'confirmed'),
       // 후기 승인 대기
       _sb.from('reviews').select('*', { count:'exact', head:true }).eq('status', 'pending'),
     ]);
@@ -2798,13 +2737,11 @@ async function renderAdminDashboard() {
     const reports        = safeCount(results[8], 8);
     const pendingReviews = safeCount(results[10], 10);
 
-    // 누적 입금액 계산 (비활성·삭제 회원 제외)
+    // 누적 입금액 계산
     let totalDeposit = 0;
     if (results[9].status === 'fulfilled' && !results[9].value?.error) {
       const rows = results[9].value?.data || [];
-      totalDeposit = rows
-        .filter(r => !r.users?.is_deactivated && !r.users?.deleted_at)
-        .reduce((s, r) => s + (r.amount || 0), 0);
+      totalDeposit = rows.reduce((s, r) => s + (r.amount || 0), 0);
     }
 
     container.innerHTML = `
@@ -2864,7 +2801,6 @@ async function renderAdminDashboard() {
           <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('deposit',null)">💳 입금 (${pendingDeposit})</button>
           <button class="btn btn-danger btn-sm"    style="flex:1;min-width:90px;" onclick="switchAdminTab('reports',null)">🚨 신고 (${reports})</button>
           <button class="btn btn-secondary btn-sm" style="flex:1;min-width:90px;" onclick="switchAdminTab('reviews',null)">✏️ 후기 (${pendingReviews})</button>
-          <button class="btn btn-outline btn-sm"   style="flex:1;min-width:90px;" onclick="switchAdminTab('deactivated',null)">🚫 비활성</button>
         </div>
       </div>`;
   } catch(err) {
@@ -2901,80 +2837,14 @@ async function switchAdminTab(tab, el) {
   if (!container) return;
   container.innerHTML = '<div style="padding:24px;text-align:center;"><div class="spinner"></div></div>';
 
-  // ── 비활성 회원 목록
-  if (tab === 'deactivated') {
-    const { data: deactivated, error: deactErr } = await _sb
-      .from('users')
-      .select('*, student_verifications!student_verifications_user_id_fkey(status), deposits!deposits_user_id_fkey(status,amount,depositor_name)')
-      .is('deleted_at', null)
-      .eq('is_deactivated', true)
-      .order('updated_at', { ascending: false });
-
-    if (deactErr) {
-      // is_deactivated 컬럼 없는 경우
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">⚠️</div>
-          <div class="empty-title">비활성 회원 조회 실패</div>
-          <div class="empty-desc">${esc(deactErr.message)}<br><br>
-            is_deactivated 컬럼이 없다면 SQL Editor에서 실행하세요:<br>
-            <code style="font-size:11px;background:#f5f5f5;padding:4px 8px;border-radius:4px;display:block;margin-top:8px;">
-              ALTER TABLE users ADD COLUMN IF NOT EXISTS is_deactivated BOOLEAN DEFAULT FALSE;
-            </code>
-          </div>
-        </div>`;
-      return;
-    }
-
-    if (!deactivated || deactivated.length === 0) {
-      container.innerHTML = `
-        <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">🚫 비활성 회원 관리</div>
-        <div class="empty-state">
-          <div class="empty-icon">✅</div>
-          <div class="empty-title">비활성 회원이 없습니다</div>
-          <div class="empty-desc">비활성화된 회원은 여기서 확인하고 복구할 수 있습니다</div>
-        </div>`;
-      return;
-    }
-
-    container.innerHTML = `
-      <div style="padding:12px 16px 4px;font-size:14px;font-weight:700;">
-        🚫 비활성 회원 관리
-        <span style="font-size:12px;font-weight:400;color:var(--gray-500);margin-left:8px;">
-          총 ${deactivated.length}명 — 모든 목록·통계에서 제외됨
-        </span>
-      </div>
-      <div style="padding:6px 16px 10px;background:#FFF3E0;font-size:12px;color:#795548;border-bottom:1px solid var(--gray-100);">
-        ⚠️ 비활성 회원은 회원관리/인증관리/입금관리/통계에 포함되지 않습니다. 복구 버튼으로 언제든 되돌릴 수 있습니다.
-      </div>
-      <div id="admin-deact-list">
-        ${deactivated.map(u => renderDeactivatedUserRow(u)).join('')}
-      </div>`;
-    window._adminDeactivated = deactivated;
-    return;
-  }
-
   // ── 회원 목록 (★ 수정 1: 외래키 충돌 방지를 위해 테이블 명시)
   if (tab === 'users') {
-    // is_deactivated 컬럼이 없을 경우를 대비해 try/catch로 이중 쿼리
-    let users, error;
-    ({ data: users, error } = await _sb
+    const { data: users, error } = await _sb
       .from('users')
       .select('*, student_verifications!student_verifications_user_id_fkey(status), deposits!deposits_user_id_fkey(status,amount,depositor_name)')
-      .is('deleted_at', null)
-      .not('username', 'like', '__del_%')
-      .neq('is_deactivated', true)
-      .order('created_at', { ascending: false }));
-
-    // is_deactivated 컬럼 없는 경우 → 컬럼 없이 재시도
-    if (error && (error.code === 'PGRST204' || error.message?.includes('is_deactivated') || error.message?.includes('schema cache'))) {
-      ({ data: users, error } = await _sb
-        .from('users')
-        .select('*, student_verifications!student_verifications_user_id_fkey(status), deposits!deposits_user_id_fkey(status,amount,depositor_name)')
-        .is('deleted_at', null)
-        .not('username', 'like', '__del_%')
-        .order('created_at', { ascending: false }));
-    }
+      .is('deleted_at', null)          // 삭제된 회원 제외
+      .not('username', 'like', '__del_%')  // 비활성화된 회원 제외
+      .order('created_at', { ascending: false });
 
     if (error) { container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">${esc(error.message)}</div></div>`; return; }
 
@@ -2995,7 +2865,7 @@ async function switchAdminTab(tab, el) {
   if (tab === 'verif') {
     const { data: verifs, error: verifListErr } = await _sb
       .from('student_verifications')
-      .select('*, users!student_verifications_user_id_fkey(id,nickname,username,university,gender,is_deactivated,deleted_at)')
+      .select('*, users!student_verifications_user_id_fkey(id,nickname,username,university,gender)')
       .order('created_at', { ascending: false });
 
     if (verifListErr) {
@@ -3005,11 +2875,8 @@ async function switchAdminTab(tab, el) {
       return;
     }
 
-    // 비활성·삭제 회원 제외
-    const activeVerifs = (verifs || []).filter(v => !v.users?.is_deactivated && !v.users?.deleted_at);
-
     // 서명된 URL 생성 (5분 유효) — 병렬 처리
-    const rows = await Promise.all((activeVerifs).map(async v => {
+    const rows = await Promise.all((verifs || []).map(async v => {
       if (v.image_path) {
         const { data: urlData } = await _sb.storage
           .from('student-verifications').createSignedUrl(v.image_path, 300);
@@ -3060,7 +2927,7 @@ async function switchAdminTab(tab, el) {
   if (tab === 'deposit') {
     const { data: deposits, error: depositListErr } = await _sb
       .from('deposits')
-      .select('*, users!deposits_user_id_fkey(id,nickname,username,gender,deleted_at,is_deactivated)')
+      .select('*, users!deposits_user_id_fkey(id,nickname,username,gender,deleted_at)')
       .order('created_at', { ascending: false });
 
     if (depositListErr) {
@@ -3070,8 +2937,8 @@ async function switchAdminTab(tab, el) {
       return;
     }
 
-    // deleted_at 있거나 is_deactivated인 유저의 입금 내역 제외
-    const activeDeposits = (deposits||[]).filter(d => !d.users?.deleted_at && !d.users?.is_deactivated);
+    // deleted_at 있는 유저의 입금 내역 제외
+    const activeDeposits = (deposits||[]).filter(d => !d.users?.deleted_at);
 
     container.innerHTML = `
       <div style="padding:12px 16px 8px;font-size:14px;font-weight:700;">💳 입금 관리</div>
@@ -3370,50 +3237,6 @@ function renderAdminUserRow(u) {
 }
 window.renderAdminUserRow = renderAdminUserRow;
 
-// 비활성 회원 행 렌더
-function renderDeactivatedUserRow(u) {
-  const v = u.student_verifications?.[0] || {};
-  const d = u.deposits?.[0] || {};
-  const DC = { pending_confirm:'chip-orange', confirmed:'chip-green', rejected:'chip-red' };
-  return `
-  <div class="admin-list-item">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-      <div style="width:44px;height:44px;min-width:44px;border-radius:50%;
-        background:var(--gray-300);
-        display:flex;align-items:center;justify-content:center;font-size:20px;">
-        🚫
-      </div>
-      <div style="flex:1;min-width:0;">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap;">
-          <span style="font-size:15px;font-weight:700;">${esc(u.nickname||'-')}</span>
-          <span class="chip ${u.gender==='male'?'chip-purple':'chip-pink'}"
-            style="font-size:10px;padding:2px 6px;">${u.gender==='male'?'남성':'여성'}</span>
-          <span class="chip chip-red" style="font-size:10px;">🚫 비활성</span>
-        </div>
-        <div style="font-size:12px;color:var(--gray-500);">
-          @${esc(u.username||'-')} · ${esc(u.university||'-')}
-        </div>
-        <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;">
-          <span class="chip ${DC[d.status]||'chip-gray'}" style="font-size:10px;padding:2px 6px;">
-            ${{pending_confirm:'⏳ 입금대기',confirmed:'✅ 입금완료',rejected:'❌ 반려'}[d.status]||'미입금'}
-          </span>
-          <span style="font-size:11px;color:var(--gray-400);">
-            ${u.updated_at ? '비활성화: ' + new Date(u.updated_at).toLocaleDateString('ko-KR') : ''}
-          </span>
-        </div>
-      </div>
-    </div>
-    <div style="display:flex;gap:8px;">
-      <button class="btn btn-primary btn-sm" style="flex:1;"
-        onclick="adminReactivateUser('${esc(u.id)}')">✅ 복구</button>
-      <button class="btn btn-outline btn-sm" style="flex:1;"
-        onclick="openAdminUserDetail('${esc(u.id)}')">👤 상세보기</button>
-      <button class="btn btn-danger btn-sm"
-        onclick="adminDeleteUser('${esc(u.id)}')">🗑️ 삭제</button>
-    </div>
-  </div>`;
-}
-
 // 회원 검색 필터
 function filterAdminUsers(q) {
   const users = window._adminUsers || [];
@@ -3525,7 +3348,7 @@ async function openAdminUserDetail(userId) {
         ? `<button class="btn btn-danger btn-sm" onclick="adminBanUser('${esc(u.id)}',null)">🚫 이용 제한</button>`
         : `<button class="btn btn-primary btn-sm" onclick="adminUnbanUser('${esc(u.id)}')">✅ 제재 해제</button>`}
       ${u.profile_active
-        ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">🚫 비활성화</button>`
+        ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">⏸️ 비활성화</button>`
         : `<button class="btn btn-secondary btn-sm" onclick="adminActivateUser('${esc(u.id)}')">▶️ 활성화</button>`}
     </div>
     <button class="btn btn-danger btn-sm"
@@ -3852,53 +3675,23 @@ async function adminActivateUser(userId) {
 }
 window.adminActivateUser = adminActivateUser;
 
-// 회원 비활성화 (is_deactivated = true) — 모든 목록·통계에서 제외, 별도 탭에서 관리
+// 회원 비활성화 (profile_active = false)
 async function adminDeactivateUser(userId) {
   try { assertAdmin(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
-  if (!confirm('이 회원을 비활성화하시겠습니까?\n\n• 회원관리/인증관리/입금관리 목록에서 숨겨집니다\n• 통계(회원 현황, 누적 입금액)에서 제외됩니다\n• \"비활성 회원\" 탭에서 언제든 복구할 수 있습니다')) return;
+  if (!confirm('이 회원을 비활성화하시겠습니까?\n서비스 이용이 제한됩니다.')) return;
 
   try {
-    const { error } = await _sb.from('users').update({
-      is_deactivated: true,
-      profile_active: false
-    }).eq('id', userId);
-    if (error) {
-      // is_deactivated 컬럼 없는 경우 안내
-      if (error.code === 'PGRST204' || error.message?.includes('is_deactivated') || error.message?.includes('schema cache')) {
-        showToast('⚠️ DB에 is_deactivated 컬럼이 없습니다.\nSQL Editor에서: ALTER TABLE users ADD COLUMN IF NOT EXISTS is_deactivated BOOLEAN DEFAULT FALSE;', 6000);
-        return;
-      }
-      throw error;
-    }
+    await _sb.from('users').update({ profile_active: false }).eq('id', userId);
     await writeAdminLog('user_deactivate', 'users', userId);
     closeModal('modal-admin-user');
-    showToast('🚫 회원이 비활성화되었습니다 (비활성 회원 탭에서 복구 가능)');
+    showToast('⏸️ 회원이 비활성화되었습니다');
     switchAdminTab('users', null);
   } catch(err) {
     showToast('❌ ' + err.message);
   }
 }
 window.adminDeactivateUser = adminDeactivateUser;
-
-// 비활성 회원 복구 (is_deactivated = false)
-async function adminReactivateUser(userId) {
-  try { assertAdmin(); } catch { return; }
-  if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
-  if (!confirm('이 회원을 복구하시겠습니까?\n회원관리/인증관리/입금관리 목록에 다시 표시되고 통계에 포함됩니다.')) return;
-
-  try {
-    const { error } = await _sb.from('users').update({ is_deactivated: false }).eq('id', userId);
-    if (error) throw error;
-    await writeAdminLog('user_reactivate', 'users', userId);
-    closeModal('modal-admin-user');
-    showToast('✅ 회원이 복구되었습니다');
-    switchAdminTab('deactivated', null);
-  } catch(err) {
-    showToast('❌ ' + err.message);
-  }
-}
-window.adminReactivateUser = adminReactivateUser;
 
 // 신고 기각
 async function adminDismissReport(reportId) {
@@ -4134,9 +3927,6 @@ window.toggleAll = toggleAll;
       <div style="font-size:12px;color:#388E3C;line-height:1.7;">
         • 학생증 인증 + 입금이 완료된 회원의 팀은 홈 화면 <strong>상단에 우선 노출</strong>돼요<br>
         • 인증 없이도 팀 등록은 가능하지만, 노출 순위가 낮을 수 있어요
-      </div>
-      <div style="font-size:12px;color:#B71C1C;margin-top:8px;padding-top:8px;border-top:1px solid #C8E6C9;font-weight:600;">
-        ⚠️ 회원가입이 되어있지 않은 팀원이 포함된 경우, 관리자 검수 시 팀이 삭제됩니다.
       </div>
     </div>`;
 })();
