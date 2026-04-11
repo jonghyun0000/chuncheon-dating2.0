@@ -1014,8 +1014,7 @@ async function submitVerification() {
       profile = existingProfile;
       console.info('[SV] 기존 프로필 재사용:', profile.id);
     } else {
-      // ★ phone_number는 users 테이블에 컬럼이 없을 수 있으므로
-      //   payload를 동적으로 구성해 컬럼이 있을 때만 포함
+      // phone_number, custom_badge 컬럼 확정 — 항상 포함
       const insertPayload = {
         auth_id:         signUpUid,
         username:        d.username,
@@ -1030,28 +1029,30 @@ async function submitVerification() {
         mbti:            d.mbti,
         bio:             d.bio,
         marketing_agree: d.marketing_agree,
-        profile_active:  false
+        profile_active:  false,
+        phone_number:    d.phone_number || null,
+        custom_badge:    d.custom_badge || null
       };
-      // phone_number 컬럼이 DB에 추가된 경우에만 포함
-      if (d.phone_number) insertPayload.phone_number = d.phone_number;
-      // custom_badge 컬럼이 DB에 있는 경우에만 포함 (없으면 무시)
-      if (d.custom_badge) insertPayload.custom_badge = d.custom_badge;
 
       let newP, profileErr;
       ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
 
-      // ★ 컬럼 없음(PGRST204) 또는 schema cache 오류 → 선택 컬럼 제거 후 재시도
+      // schema cache 오류 시 optional 컬럼 제거 후 재시도 + 별도 UPDATE
       const isMissingCol = (e) =>
         e?.code === 'PGRST204' ||
         e?.message?.includes('schema cache') ||
         e?.message?.includes('Could not find');
 
       if (profileErr && isMissingCol(profileErr)) {
-        console.warn('[SV] 선택 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
-        // custom_badge, phone_number 제거 후 재시도
+        console.warn('[SV] 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
         delete insertPayload.custom_badge;
         delete insertPayload.phone_number;
         ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+        // INSERT 성공 후 phone_number UPDATE로 저장
+        if (!profileErr && newP && d.phone_number) {
+          await _sb.from('users').update({ phone_number: d.phone_number }).eq('id', newP.id);
+          newP.phone_number = d.phone_number;
+        }
       }
 
       if (profileErr) {
@@ -1804,9 +1805,7 @@ async function openApplyScreen(teamId) {
     const { data: myTeam, error } = await _sb.from('teams')
       .select('*, team_members(*)')
       .eq('leader_id', state.profile.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
 
     if (error) {
       if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">팀 조회 오류: ${esc(error.message)}</div>`;
@@ -1920,6 +1919,7 @@ async function submitApply() {
 
     const message = document.getElementById('apply-message')?.value.trim() || '';
 
+    // ★ 규칙: female_team_id=신청자팀, male_team_id=피신청자팀 (성별 무관)
     const insertData = {
       status: 'pending', created_at: new Date().toISOString(),
       female_team_id: myTeam.id, male_team_id: targetTeamId
@@ -1979,6 +1979,7 @@ async function loadAndRenderRequests(tab) {
     const STATUS_LABEL = { pending:'⏳ 검토 대기', reviewing:'🔍 검토중', accepted:'✅ 수락', rejected:'❌ 거절', matched:'🎉 매칭완료', expired:'만료' };
     const STATUS_CLS   = { pending:'chip-orange', reviewing:'chip-purple', accepted:'chip-green', rejected:'chip-red', matched:'chip-green', expired:'chip-gray' };
     let data, error;
+    // ★ 규칙: female_team_id=신청자, male_team_id=피신청자
     if (tab === 'sent') {
       ({ data, error } = await _sb.from('match_requests')
         .select('*, male_team_id, female_team_id, teams!match_requests_male_team_id_fkey(title,university)')
@@ -2180,12 +2181,15 @@ async function acceptMatchRequest(requestId) {
     const { data: reqBefore } = await _sb.from('match_requests')
       .select('male_team_id, female_team_id').eq('id', requestId).maybeSingle();
     if (!reqBefore) { showToast('❌ 신청 정보를 찾을 수 없습니다.'); return; }
+
     const { data: myTeam } = await _sb.from('teams').select('id')
       .eq('leader_id', state.profile?.id)
       .order('created_at', { ascending: false }).limit(1).maybeSingle();
+
     const opponentTeamId = myTeam?.id === reqBefore.male_team_id
       ? reqBefore.female_team_id : reqBefore.male_team_id;
-    // ★ 연락처 먼저 조회 (status 바꾸기 전)
+
+    // ★ status 변경 전에 연락처 먼저 조회
     let preloaded = null;
     if (opponentTeamId) {
       const { data: oppTeam } = await _sb.from('teams')
@@ -2194,6 +2198,7 @@ async function acceptMatchRequest(requestId) {
       if (oppTeam) {
         let phone = oppTeam.contact_phone || '';
         const kakao = oppTeam.contact_kakao || '';
+        // contact_phone 없으면 리더 phone_number 사용
         if (!phone && oppTeam.leader_id) {
           const { data: leader } = await _sb.from('users')
             .select('phone_number').eq('id', oppTeam.leader_id).maybeSingle();
@@ -2202,13 +2207,16 @@ async function acceptMatchRequest(requestId) {
         preloaded = { teamName: oppTeam.title, phone, kakao };
       }
     }
+
     const { error: reqErr } = await _sb.from('match_requests')
       .update({ status: 'matched', responded_at: new Date().toISOString() }).eq('id', requestId);
     if (reqErr) throw reqErr;
+
     const teamIds = [reqBefore.male_team_id, reqBefore.female_team_id].filter(Boolean);
     if (teamIds.length > 0) {
       await _sb.from('teams').update({ status: 'matched', is_visible: false }).in('id', teamIds);
     }
+
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
     await showMatchSuccess(requestId, preloaded);
     updateHomeStats();
@@ -3140,7 +3148,6 @@ function renderAdminUserRow(u) {
         </div>
         <div style="font-size:12px;color:var(--gray-500);">
           @${esc(u.username||'-')} · ${esc(u.university||'-')}
-          ${u.phone_number ? `· 📞 ${esc(u.phone_number)}` : ''}
         </div>
         <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;">
           <span class="chip ${VC[v.status]||'chip-gray'}" style="font-size:10px;padding:2px 6px;">
@@ -3230,7 +3237,7 @@ async function openAdminUserDetail(userId) {
       <div style="padding:10px 14px;background:var(--navy);font-size:12px;font-weight:700;
         color:rgba(255,255,255,0.85);">🔐 개인정보 (관리자 전용)</div>
       ${iRow('🆔 학번',      esc(u.student_number||'-'))}
-      ${iRow('📞 전화번호 (가입)',  esc(u.phone_number||'-'))}
+      ${iRow('📞 전화번호 (가입)', esc(u.phone_number||'-'))}
       ${myTeam?.contact_phone ? iRow('📞 전화번호 (팀등록)', esc(myTeam.contact_phone)) : ''}
       ${myTeam?.contact_kakao ? iRow('💛 카카오 ID (팀등록)', esc(myTeam.contact_kakao)) : ''}
       ${iRow('📅 가입일',    u.created_at ? new Date(u.created_at).toLocaleString('ko-KR') : '-')}
