@@ -1436,17 +1436,15 @@ function renderTeamList() {
     } else if (isGuest) {
       applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showAuthGateModal('apply')">💌 신청하기</button>`;
     } else if (isMale) {
+      // 남성팀 카드: 여성만 신청 가능
       if (state.profile?.gender === 'female') {
         applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
       } else {
         applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👨 남성팀 (신청 불가)</button>`;
       }
     } else {
-      if (state.profile?.gender === 'male') {
-        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
-      } else {
-        applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
-      }
+      // 여성팀 카드: 신청 불가 (남성은 신청받는 구조)
+      applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
     }
 
     return `
@@ -1896,9 +1894,9 @@ async function submitApply() {
     showToast('❌ 이미 매칭이 완료된 팀입니다.'); return;
   }
 
-  // 성별 교차 검증 (남→여성팀 / 여→남성팀)
-  if (profile.gender === 'male' && targetTeam.gender !== 'female') {
-    showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return;
+  // 성별 교차 검증 — 여성만 신청 가능, 남성은 받는 구조
+  if (profile.gender === 'male') {
+    showToast('❌ 남성팀은 신청을 받는 구조입니다. 여성팀의 신청을 기다려주세요.'); return;
   }
   if (profile.gender === 'female' && targetTeam.gender !== 'male') {
     showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return;
@@ -1923,16 +1921,14 @@ async function submitApply() {
 
     const message = document.getElementById('apply-message')?.value.trim() || '';
 
-    const insertData = { status: 'pending', created_at: new Date().toISOString() };
+    // 신청자는 항상 여성팀 (female_team_id = 내팀, male_team_id = 상대팀)
+    const insertData = {
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      female_team_id: myTeam.id,      // 신청자(여성)
+      male_team_id:   targetTeamId    // 신청대상(남성)
+    };
     if (message) insertData.message = message;
-
-    if (profile.gender === 'male') {
-      insertData.male_team_id   = myTeam.id;
-      insertData.female_team_id = targetTeamId;
-    } else {
-      insertData.female_team_id = myTeam.id;
-      insertData.male_team_id   = targetTeamId;
-    }
 
     const { error } = await _sb.from('match_requests').insert(insertData);
 
@@ -2046,7 +2042,8 @@ async function loadAndRenderRequests(tab) {
     }
 
     container.innerHTML = data.map(r => {
-      const teamData = tab === 'sent' ? r.teams : r['teams'];
+      // Supabase 조인 결과는 'teams' 키로 반환됨
+      const teamData = r.teams;
       const teamName = teamData?.title || '-';
       const teamUniv = teamData?.university || '-';
       const label    = STATUS_LABEL[r.status] || r.status;
