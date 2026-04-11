@@ -2051,19 +2051,22 @@ async function loadAndRenderRequests(tab) {
       const date     = new Date(r.created_at).toLocaleDateString('ko-KR');
       const isMatched = r.status === 'matched';
 
-      // 받은신청 탭: 수락/거절 대신 매칭완료 시 연락처 보기만 표시
-      // (수락/거절은 관리자가 처리하는 구조)
+      // 받은신청 탭 버튼 처리
       let actionBtns = '';
       if (isMatched) {
-        // 상대팀 ID 파악 (남성=female_team_id가 상대, 여성=male_team_id가 상대)
+        // 상대팀 ID 파악 (받은신청(남성): 신청자=여성팀, 보낸신청(여성): 상대=남성팀)
         const oppTeamId = tab === 'received'
-          ? (r.female_team_id || '')   // 받은신청(남성): 신청자=여성팀
-          : (tab === 'sent' && r.male_team_id ? r.male_team_id : ''); // 보낸신청(여성): 상대=남성팀
+          ? (r.female_team_id || '')
+          : (r.male_team_id || '');
         actionBtns = `<button class="btn btn-primary btn-sm" style="flex:1;"
           onclick="showMatchContactDirect('${esc(r.id)}','${esc(oppTeamId || '')}')">🎉 연락처 보기</button>`;
       } else if (tab === 'received' && r.status === 'pending') {
-        // 받은신청 pending: 연락처 아직 없으므로 대기 안내
-        actionBtns = `<span style="font-size:12px;color:var(--gray-400);padding:8px 0;display:block;">⏳ 관리자 매칭 처리 대기 중</span>`;
+        // 받은신청 pending: 수락 / 거절 버튼
+        actionBtns = `
+          <button class="btn btn-primary btn-sm" style="flex:1;"
+            onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
+          <button class="btn btn-danger btn-sm" style="flex:1;"
+            onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`;
       }
 
       return `
