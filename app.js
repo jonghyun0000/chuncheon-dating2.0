@@ -1808,16 +1808,22 @@ async function openApplyScreen(teamId) {
   showScreen('screen-apply');
 
   try {
-    // 내 팀 + 팀원 조회
+    // 내 팀 + 팀원 조회 (maybeSingle: 없으면 null, 에러 안 남)
     const { data: myTeam, error } = await _sb.from('teams')
       .select('*, team_members(*)')
       .eq('leader_id', state.profile.id)
-      .single();
+      .maybeSingle();
 
-    if (error || !myTeam) {
+    if (error) {
+      // RLS 등 진짜 에러
+      if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">
+        팀 정보를 불러오지 못했습니다: ${esc(error.message)}</div>`;
+      return;
+    }
+
+    if (!myTeam) {
       if (preview)  preview.innerHTML = '';
       if (noBanner) noBanner.style.display = 'block';
-      // 신청 버튼 숨김 확실히
       if (submitBtn) submitBtn.style.display = 'none';
       return;
     }
@@ -1868,8 +1874,8 @@ async function openApplyScreen(teamId) {
         </p>`;
     }
 
-    // 팀원이 있으면 신청 버튼 표시
-    if (submitBtn) submitBtn.style.display = members.length > 0 ? 'block' : 'none';
+    // 팀이 있으면 신청 버튼 표시 (팀원 0명이어도 일단 표시)
+    if (submitBtn) submitBtn.style.display = 'block';
 
   } catch(err) {
     if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">
@@ -1914,9 +1920,12 @@ async function submitApply() {
     const { data: myTeam, error: teamErr } = await _sb.from('teams')
       .select('id')
       .eq('leader_id', profile.id)
-      .single();
+      .maybeSingle();
 
-    if (teamErr || !myTeam) {
+    if (teamErr) {
+      showToast('❌ 팀 조회 오류: ' + teamErr.message); return;
+    }
+    if (!myTeam) {
       showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.'); return;
     }
 
