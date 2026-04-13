@@ -33,6 +33,11 @@ const _sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY
 // ============================================================
 // 2. 전역 상태 (단일 진실 원천)
 // ============================================================
+// 연락처 모듈 스코프 (전역 노출 방지)
+let _matchContactPhone = '';
+let _matchContactKakao = '';
+let _matchContactName  = '';
+
 const state = {
   authUser:      null,   // Supabase auth.user
   profile:       null,   // users 테이블 row
@@ -42,7 +47,7 @@ const state = {
   regData:       null,   // 회원가입 임시 데이터
   uploadedFile:  null    // 학생증 파일 객체
 };
-window.state = state;
+// window.state 제거 — 콘솔에서 role 조작 방지
 
 // ============================================================
 // 3. XSS 방어 유틸 (innerHTML 사용 시 반드시 통과)
@@ -203,7 +208,7 @@ async function loadProfile(authUserId) {
     .select('*')
     .eq('auth_id', authUserId)
     .is('deleted_at', null)
-    .single();
+    .maybeSingle();
 
   if (error || !data) { state.profile = null; return null; }
   state.profile = data;
@@ -644,7 +649,7 @@ async function updateBadges() {
   try {
     // 내 팀 조회
     const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', profile.id).single();
+      .from('teams').select('id').eq('leader_id', profile.id).order('created_at',{ascending:false}).limit(1).maybeSingle();
 
     let pendingCount = 0;
     if (myTeam) {
@@ -683,7 +688,6 @@ async function updateBadges() {
     console.warn('[updateBadges]', e.message);
   }
 }
-window.updateBadges = updateBadges;
 
 // ============================================================
 // 13. 홈 통계 — Supabase 직접 집계
@@ -726,7 +730,6 @@ async function updateHomeStats() {
     else if (females !== null) setText('stat-members', females);
   } catch(e) { console.warn('[updateHomeStats]', e.message); }
 }
-window.updateHomeStats = updateHomeStats;
 
 // ============================================================
 // 14. 회원가입 — 실제 DB 저장
@@ -1038,7 +1041,7 @@ async function submitVerification() {
       if (d.custom_badge) insertPayload.custom_badge = d.custom_badge;
 
       let newP, profileErr;
-      ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+      ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().maybeSingle());
 
       // ★ 컬럼 없음(PGRST204) 또는 schema cache 오류 → 선택 컬럼 제거 후 재시도
       const isMissingCol = (e) =>
@@ -1051,7 +1054,7 @@ async function submitVerification() {
         // custom_badge, phone_number 제거 후 재시도
         delete insertPayload.custom_badge;
         delete insertPayload.phone_number;
-        ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+        ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().maybeSingle());
       }
 
       if (profileErr) {
@@ -1487,7 +1490,6 @@ function renderTeamList() {
     </div>`;
   }).join('');
 }
-window.renderTeamList = renderTeamList;
 
 // ============================================================
 // 20. 팀 필터
@@ -1616,7 +1618,7 @@ async function registerTeam() {
       contact_phone: phoneNum  || null,
       contact_kakao: kakaoId   || null,
       is_verified:   isVerified
-    }).select().single());
+    }).select().maybeSingle());
 
     // 시도 2: is_verified 제외
     if (teamErr && isMissingCol(teamErr)) {
@@ -1628,7 +1630,7 @@ async function registerTeam() {
         status:        'recruiting',
         contact_phone: phoneNum || null,
         contact_kakao: kakaoId  || null
-      }).select().single());
+      }).select().maybeSingle());
     }
 
     // 시도 3: contact_kakao 제외
@@ -1640,7 +1642,7 @@ async function registerTeam() {
         university:    profile.university,
         status:        'recruiting',
         contact_phone: phoneNum || null
-      }).select().single());
+      }).select().maybeSingle());
     }
 
     // 시도 4: contact_phone도 제외
@@ -1651,7 +1653,7 @@ async function registerTeam() {
         title,
         university: profile.university,
         status:     'recruiting'
-      }).select().single());
+      }).select().maybeSingle());
     }
 
     // 시도 5: contact_phone도 제외
@@ -1662,7 +1664,7 @@ async function registerTeam() {
         title,
         university: profile.university,
         status:     'recruiting'
-      }).select().single());
+      }).select().maybeSingle());
     }
 
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
@@ -1808,14 +1810,10 @@ async function openApplyScreen(teamId) {
       .limit(1)
       .maybeSingle();
 
-    if (error) {
-      if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">오류: ${esc(error.message)}</div>`;
-      return;
-    }
-
-    if (!myTeam) {
+    if (error || !myTeam) {
       if (preview)  preview.innerHTML = '';
       if (noBanner) noBanner.style.display = 'block';
+      // 신청 버튼 숨김 확실히
       if (submitBtn) submitBtn.style.display = 'none';
       return;
     }
@@ -1888,7 +1886,7 @@ async function submitApply() {
   if (!targetTeam) {
     const { data: fetched } = await _sb
       .from('teams').select('id, gender, title, status')
-      .eq('id', targetTeamId).single();
+      .eq('id', targetTeamId).maybeSingle();
     targetTeam = fetched;
   }
   if (!targetTeam) { showToast('❌ 대상팀 정보를 찾을 수 없습니다.'); return; }
@@ -1916,8 +1914,9 @@ async function submitApply() {
       .limit(1)
       .maybeSingle();
 
-    if (teamErr) { showToast('❌ 팀 조회 오류: ' + teamErr.message); return; }
-    if (!myTeam) { showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.'); return; }
+    if (teamErr || !myTeam) {
+      showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.'); return;
+    }
 
     // 자기 팀에는 신청 불가
     if (myTeam.id === targetTeamId) {
@@ -1983,7 +1982,10 @@ async function loadAndRenderRequests(tab) {
   try {
     // 내 팀 조회
     const { data: myTeam } = await _sb.from('teams')
-      .select('id').eq('leader_id', state.profile?.id).single();
+      .select('id').eq('leader_id', state.profile?.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     if (!myTeam) {
       container.innerHTML = `<div class="empty-state">
@@ -2130,9 +2132,9 @@ async function showMatchSuccess(requestId, preloadedData) {
     if (phoneEl) phoneEl.textContent = preloadedData.phone || '미등록';
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = preloadedData.kakao || '미등록';
-    window._matchContactPhone = preloadedData.phone || '';
-    window._matchContactKakao = preloadedData.kakao || '';
-    window._matchContactName  = preloadedData.teamName || '상대팀';
+    _matchContactPhone = preloadedData.phone || '';
+    _matchContactKakao = preloadedData.kakao || '';
+    _matchContactName  = preloadedData.teamName || '상대팀';
     return;
   }
 
@@ -2145,7 +2147,7 @@ async function showMatchSuccess(requestId, preloadedData) {
 
     // 내 팀 조회
     const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', profile.id).single();
+      .from('teams').select('id').eq('leader_id', profile.id).order('created_at',{ascending:false}).limit(1).maybeSingle();
     if (!myTeam) return;
 
     // match_requests 조회 — RLS SELECT 정책이 있어야 동작
@@ -2153,7 +2155,7 @@ async function showMatchSuccess(requestId, preloadedData) {
       .from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId)
-      .single();
+      .maybeSingle();
 
     if (reqErr || !req) {
       // RLS로 조회 안 되는 경우 — matched 상태인 내 팀의 상대팀을 다른 방법으로 찾기
@@ -2165,7 +2167,7 @@ async function showMatchSuccess(requestId, preloadedData) {
         .eq('status', 'matched')
         .order('created_at', { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
       if (!altReq) { console.warn('[showMatchSuccess] 매칭 정보 조회 실패'); return; }
 
@@ -2192,7 +2194,7 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
     .from('teams')
     .select('title, contact_phone, contact_kakao')
     .eq('id', opponentTeamId)
-    .single();
+    .maybeSingle();
 
   if (oppTeam) {
     setText('match-success-team-name', oppTeam.title || '상대팀');
@@ -2200,17 +2202,17 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
     if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '미등록';
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = oppTeam.contact_kakao || '미등록';
-    window._matchContactPhone = oppTeam.contact_phone || '';
-    window._matchContactKakao = oppTeam.contact_kakao || '';
-    window._matchContactName  = oppTeam.title || '상대팀';
+    _matchContactPhone = oppTeam.contact_phone || '';
+    _matchContactKakao = oppTeam.contact_kakao || '';
+    _matchContactName  = oppTeam.title || '상대팅';
   }
 }
 
 // 연락처 저장 (vCard 다운로드)
 function saveMatchContact() {
-  const phone = (window._matchContactPhone || '').trim();
-  const kakao = (window._matchContactKakao || '').trim();
-  const name  = (window._matchContactName  || '상대팀').trim();
+  const phone = (_matchContactPhone || '').trim();
+  const kakao = (_matchContactKakao || '').trim();
+  const name  = (_matchContactName  || '상대팀').trim();
   if (!phone && !kakao) { showToast('저장할 연락처가 없습니다.'); return; }
 
   if (phone) {
@@ -2242,7 +2244,7 @@ async function acceptMatchRequest(requestId) {
       .from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId)
-      .single();
+      .maybeSingle();
 
     // match_request 상태 → matched
     const { error: reqErr } = await _sb.from('match_requests').update({
@@ -2252,7 +2254,10 @@ async function acceptMatchRequest(requestId) {
 
     // 내 팀 파악
     const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', state.profile?.id).single();
+      .from('teams').select('id').eq('leader_id', state.profile?.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     // 상대팀 ID 결정
     let opponentTeamId = null;
@@ -2269,7 +2274,7 @@ async function acceptMatchRequest(requestId) {
         .from('teams')
         .select('title, contact_phone, contact_kakao')
         .eq('id', opponentTeamId)
-        .single();
+        .maybeSingle();
       if (oppTeam) {
         preloaded = { teamName: oppTeam.title, phone: oppTeam.contact_phone, kakao: oppTeam.contact_kakao };
       }
@@ -2329,7 +2334,7 @@ async function loadChatTeams() {
   try {
     // 내 팀 조회
     const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', profile.id).single();
+      .from('teams').select('id').eq('leader_id', profile.id).order('created_at',{ascending:false}).limit(1).maybeSingle();
 
     if (!myTeam) {
       sel.innerHTML = '<option value="">등록된 팀이 없습니다</option>';
@@ -2460,7 +2465,6 @@ function renderMessages() {
   }
   container.scrollTop = container.scrollHeight;
 }
-window.renderMessages = renderMessages;
 
 function _buildTimeStr() {
   const now = new Date();
@@ -2501,8 +2505,8 @@ async function updateMyPageStatus() {
 
   try {
     const [{ data: verif }, { data: deposit }] = await Promise.all([
-      _sb.from('student_verifications').select('status').eq('user_id', profile.id).single(),
-      _sb.from('deposits').select('status').eq('user_id', profile.id).single()
+      _sb.from('student_verifications').select('status').eq('user_id', profile.id).maybeSingle(),
+      _sb.from('deposits').select('status').eq('user_id', profile.id).maybeSingle()
     ]);
 
     const V_LABEL = { pending:'⏳ 검토중', approved:'✅ 승인', rejected:'❌ 반려' };
@@ -2561,7 +2565,9 @@ async function confirmDeleteMyTeam() {
     .from('teams')
     .select('id, title, status')
     .eq('leader_id', profile.id)
-    .single();
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (!myTeam) {
     showToast('등록된 팀이 없습니다');
@@ -2674,6 +2680,23 @@ function assertAdmin() {
   if (state.profile?.role !== 'admin') {
     showToast('❌ 관리자 권한이 필요합니다');
     throw new Error('UNAUTHORIZED');
+  }
+}
+
+// DB 레벨 관리자 검증 (비동기) — 파괴적 액션 전 호출
+async function assertAdminDB() {
+  if (state.profile?.role !== 'admin') {
+    showToast('❌ 관리자 권한이 필요합니다');
+    throw new Error('UNAUTHORIZED');
+  }
+  // DB에서 role 재확인 (state 조작 방지)
+  const { data } = await _sb.from('users')
+    .select('role')
+    .eq('id', state.profile.id)
+    .maybeSingle();
+  if (data?.role !== 'admin') {
+    showToast('❌ 관리자 권한 검증 실패');
+    throw new Error('UNAUTHORIZED_DB');
   }
 }
 
@@ -3231,7 +3254,6 @@ function renderAdminUserRow(u) {
     </div>
   </div>`;
 }
-window.renderAdminUserRow = renderAdminUserRow;
 
 // 회원 검색 필터
 function filterAdminUsers(q) {
@@ -3257,7 +3279,7 @@ async function openAdminUserDetail(userId) {
 
   const { data: u } = await _sb.from('users')
     .select('*, student_verifications!student_verifications_user_id_fkey(*), deposits!deposits_user_id_fkey(*)')
-    .eq('id', userId).single();
+    .eq('id', userId).maybeSingle();
   if (!u) return;
 
   const v   = u.student_verifications?.[0] || {};
@@ -3366,7 +3388,7 @@ function iRow(label, value) {
 
 // 인증 승인
 async function adminApproveVerif(verifId, userId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!confirm('인증을 승인하시겠습니까?')) return;
 
   const adminProfile = state.profile;
@@ -3388,7 +3410,7 @@ window.adminApproveVerif = adminApproveVerif;
 
 // 인증 반려
 async function adminRejectVerif(verifId, userId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   const reason = prompt('반려 사유를 입력하세요 (회원에게 표시됩니다):');
   if (reason === null) return;
 
@@ -3411,7 +3433,7 @@ window.adminRejectVerif = adminRejectVerif;
 
 // 입금 확인
 async function adminConfirmDeposit(depositId, userId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!confirm('입금을 확인 처리하시겠습니까?')) return;
 
   try {
@@ -3432,7 +3454,7 @@ window.adminConfirmDeposit = adminConfirmDeposit;
 
 // 입금 반려
 async function adminRejectDeposit(depositId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   const reason = prompt('반려 사유를 입력하세요:');
   if (reason === null) return;
 
@@ -3452,7 +3474,7 @@ window.adminRejectDeposit = adminRejectDeposit;
 
 // 회원 제재
 async function adminBanUser(userId, reportId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!userId || !/^[0-9a-f-]{36}$/i.test(userId)) return;
   if (!confirm('이 회원을 이용 제한하시겠습니까?')) return;
 
@@ -3475,7 +3497,7 @@ window.adminBanUser = adminBanUser;
 
 // 제재 해제
 async function adminUnbanUser(userId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!confirm('제재를 해제하시겠습니까?')) return;
 
   try {
@@ -3540,7 +3562,7 @@ async function adminDeleteReview(reviewId) {
 }
 window.adminDeleteReview = adminDeleteReview;
 async function adminDeleteUser(userId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
   if (!confirm('⚠️ 이 회원을 삭제하시겠습니까?\n\n' +
     '• 팀, 신청내역, 입금 내역이 모두 제거됩니다\n' +
@@ -3635,7 +3657,7 @@ window.adminRestoreTeam = adminRestoreTeam;
 
 // 팀 완전 삭제 (team_members 포함 cascade — DB FK ON DELETE CASCADE 권장)
 async function adminDeleteTeam(teamId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!confirm('⚠️ 이 팀을 완전히 삭제하시겠습니까?\n팀원 데이터도 함께 삭제됩니다. 되돌릴 수 없습니다.')) return;
 
   try {
@@ -3655,7 +3677,7 @@ window.adminDeleteTeam = adminDeleteTeam;
 
 // 회원 활성화 (profile_active = true)
 async function adminActivateUser(userId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
   if (!confirm('이 회원을 활성화하시겠습니까?')) return;
 
@@ -3673,7 +3695,7 @@ window.adminActivateUser = adminActivateUser;
 
 // 회원 비활성화 (profile_active = false)
 async function adminDeactivateUser(userId) {
-  try { assertAdmin(); } catch { return; }
+  try { await assertAdminDB(); } catch { return; }
   if (!/^[0-9a-f-]{36}$/i.test(userId)) return;
   if (!confirm('이 회원을 비활성화하시겠습니까?\n서비스 이용이 제한됩니다.')) return;
 
@@ -3739,7 +3761,6 @@ function renderPreviewTeamList() {
       </div>
     </div>`).join('');
 }
-window.renderPreviewTeamList = renderPreviewTeamList;
 
 // ============================================================
 // 30. 모달 / 공통 유틸
