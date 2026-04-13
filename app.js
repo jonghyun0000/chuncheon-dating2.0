@@ -198,25 +198,34 @@ async function initApp() {
 }
 
 async function loadProfile(authUserId) {
-  let { data } = await _sb
+  // 1차 시도
+  const { data, error } = await _sb
     .from('users')
     .select('*')
     .eq('auth_id', authUserId)
     .is('deleted_at', null)
     .maybeSingle();
 
-  if (!data) {
-    for (let i = 0; i < 2; i++) {
-      await new Promise(r => setTimeout(r, 700));
-      const r2 = await _sb.from('users').select('*')
-        .eq('auth_id', authUserId).is('deleted_at', null).maybeSingle();
-      if (r2.data) { data = r2.data; break; }
-    }
+  if (data) { state.profile = data; return data; }
+
+  // 에러 로그 (디버깅용)
+  if (error) console.warn('[loadProfile] 1차 오류:', error.code, error.message);
+
+  // 2차 재시도 (Auth 세션 동기화 지연 대응)
+  for (let i = 0; i < 3; i++) {
+    await new Promise(r => setTimeout(r, 800));
+    const { data: d2, error: e2 } = await _sb
+      .from('users')
+      .select('*')
+      .eq('auth_id', authUserId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (d2) { state.profile = d2; return d2; }
+    if (e2) console.warn(`[loadProfile] ${i+2}차 오류:`, e2.code, e2.message);
   }
 
-  if (!data) { state.profile = null; return null; }
-  state.profile = data;
-  return data;
+  state.profile = null;
+  return null;
 }
 
 function enterAuthenticatedApp() {
@@ -281,7 +290,8 @@ async function doLogin() {
     const profile = await loadProfile(data.user.id);
     if (!profile) {
       await _sb.auth.signOut();
-      throw new Error('사용자 정보를 찾을 수 없습니다. 관리자에게 문의하세요.');
+      // RLS 정책 문제일 가능성 — SQL Editor에서 확인 필요
+      throw new Error('사용자 정보를 찾을 수 없습니다.\n\n해결: Supabase SQL Editor에서 실행:\nDROP POLICY IF EXISTS "users_select_own" ON users;\nCREATE POLICY "users_select_own" ON users FOR SELECT USING (auth_id = auth.uid());');
     }
 
     // ★ 제재 계정 즉시 차단
