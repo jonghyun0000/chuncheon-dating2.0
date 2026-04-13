@@ -1587,13 +1587,10 @@ async function registerTeam() {
   }
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
-  // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
-  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
-  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
-  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
-  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
-    showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
-  }
+  // ── 연락처 수집 (인스타그램 ID 필수, 카카오 ID 선택)
+  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;  // 인스타ID
+  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;  // 카카오ID
+  if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
