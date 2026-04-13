@@ -846,8 +846,8 @@ async function goToVerification() {
     showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
-  if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
-    showToast('전화번호를 올바르게 입력해주세요 (예: 010-0000-0000)'); return;
+  if (!phoneNum || !/^[a-zA-Z0-9._]{2,50}$/.test(phoneNum)) {
+    showToast('카카오톡 ID를 입력해주세요 (영문·숫자 2자 이상)'); return;
   }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
@@ -1154,7 +1154,7 @@ async function submitVerification() {
     }
 
     // ── STEP 6: deposits 초기 레코드 (이미 있으면 무시 — .catch() 금지)
-    const fee = profile.gender === 'female' ? (cfg.FEE_FEMALE || 1000) : (cfg.FEE_MALE || 3000);
+    const fee = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
     const { error: depositErr } = await _sb.from('deposits').insert({
       user_id: profile.id, depositor_name: profile.nickname,
       amount: fee, status: 'pending_confirm'
@@ -1189,27 +1189,20 @@ async function submitDeposit() {
   const name = document.getElementById('depositor-name')?.value.trim();
   if (!name || name.length < 2) { showToast('입금자명을 정확히 입력해주세요'); return; }
 
-  const amount = profile.gender === 'female' ? (cfg.FEE_FEMALE || 1000) : (cfg.FEE_MALE || 3000);
+  const amount = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
 
   setBtnLoading('btn-deposit', true, '입금 완료했습니다 ✓');
   try {
-    // INSERT 시도 → 중복이면 UPDATE
-    let { error } = await _sb.from('deposits').insert(
-      { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' }
+    const { error } = await _sb.from('deposits').upsert(
+      { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' },
+      { onConflict: 'user_id' }
     );
-    if (error && (error.code === '23505' || error.message?.includes('duplicate'))) {
-      // 이미 있으면 UPDATE
-      const { error: updErr } = await _sb.from('deposits').update(
-        { depositor_name: name, amount, status: 'pending_confirm' }
-      ).eq('user_id', profile.id);
-      if (updErr) throw updErr;
-    } else if (error) {
-      throw error;
-    }
+    if (error) throw new Error('입금 신청 저장 실패 (RLS 정책 오류 — Supabase SQL Editor에서 deposits 테이블 INSERT 정책을 확인하세요): ' + error.message);
+
     showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
     showScreen('screen-pending');
   } catch(err) {
-    showToast('❌ 입금 신청 실패: ' + err.message);
+    showToast('❌ ' + err.message);
   } finally {
     setBtnLoading('btn-deposit', false, '입금 완료했습니다 ✓');
   }
@@ -1594,10 +1587,13 @@ async function registerTeam() {
   }
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
-  // ── 연락처 수집 (인스타그램 ID 필수)
-  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;  // 인스타ID
-  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;  // 추가 연락처
-  if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
+  // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
+  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
+  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
+  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
+  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
+  }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
@@ -3895,19 +3891,19 @@ window.toggleAll = toggleAll;
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
     <!-- 연락처 섹션 -->
     <div class="card card-p" style="margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📸 연락처</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다. 인스타그램 ID는 필수입니다.
+        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">인스타그램 ID <span class="required">*</span></label>
-        <input class="form-input" type="text" id="contact-phone" style="height:48px;"
-          placeholder="인스타그램 아이디 (@제외)" maxlength="50" autocomplete="off" inputmode="text">
+        <label class="form-label">전화번호</label>
+        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
+          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
       </div>
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
         <input class="form-input" type="text" id="contact-kakao" style="height:48px;"
-          placeholder="카카오톡 아이디 (선택)" maxlength="50" autocomplete="off">
+          placeholder="카카오톡 아이디 입력" maxlength="50" autocomplete="off">
       </div>
     </div>
 
