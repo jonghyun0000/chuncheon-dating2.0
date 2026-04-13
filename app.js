@@ -4,8 +4,10 @@
  * v2.1 업데이트: 조인 외래키 명시, 카카오링크 검증, Auth 세션 예외 처리 강화
  * v2.2 업데이트: 남녀팀 통합 목록, 인증팀 상단 노출, 전화번호 전용 연락처,
  *               아이디/비번 찾기(생년월일+학번+전화), 팀 등록 인증 선택화
+ * v2.3 업데이트: IIFE 캡슐화, window.* 전역 노출 제거, onclick→addEventListener
  */
 
+(() => {
 'use strict';
 
 // ============================================================
@@ -33,7 +35,6 @@ const _sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY
 // ============================================================
 // 2. 전역 상태 (단일 진실 원천)
 // ============================================================
-let _matchContactPhone = '', _matchContactKakao = '', _matchContactName = '';
 const state = {
   authUser:      null,   // Supabase auth.user
   profile:       null,   // users 테이블 row
@@ -43,7 +44,6 @@ const state = {
   regData:       null,   // 회원가입 임시 데이터
   uploadedFile:  null    // 학생증 파일 객체
 };
-// window.state 제거
 
 // ============================================================
 // 3. XSS 방어 유틸 (innerHTML 사용 시 반드시 통과)
@@ -341,8 +341,8 @@ function showFindAccountModal(mode) {
   }
 
   // ★ 모드를 전역에 저장 — innerHTML 내부의 onclick에서 접근 가능
-  window._findAccountMode = (mode === 'pw') ? 'pw' : 'id';
-  const isId = (window._findAccountMode === 'id');
+  _findAccountMode = (mode === 'pw') ? 'pw' : 'id';
+  const isId = (_findAccountMode === 'id');
 
   el.innerHTML = `
     <div class="modal-sheet" style="border-radius:20px 20px 0 0;padding:0;overflow:hidden;
@@ -392,14 +392,14 @@ function showFindAccountModal(mode) {
         <div id="find-account-result"
           style="font-size:13px;min-height:20px;margin-bottom:12px;
             text-align:center;white-space:pre-line;line-height:1.6;"></div>
-        <!-- ★ onclick에 window._findAccountMode 사용 → 항상 현재 모드 참조 -->
+        <!-- ★ bindEvents에서 _findAccountMode 참조 -->
         <button class="btn btn-primary"
-          onclick="__app.doFindAccount ? __app.doFindAccount(window._findAccountMode) : doFindAccount(window._findAccountMode)"
+          id="btn-find-account-submit"
           style="width:100%;height:50px;font-size:15px;">
           ${isId ? '아이디 확인' : '비밀번호 재설정'}
         </button>
         <button class="btn btn-outline" style="width:100%;margin-top:8px;"
-          onclick="__app.closeModal('modal-find-account')">취소</button>
+          onclick="closeModal('modal-find-account')">취소</button>
       </div>
     </div>`;
 
@@ -1291,6 +1291,12 @@ async function doWithdraw() { await deleteAccount(); }
 // ============================================================
 // 18. 팀 목록 (DB에서 로드) — 남녀팀 모두 표시
 // ============================================================
+// 내부 상태 변수 (IIFE 스코프)
+let _adminUsers       = [];
+let _findAccountMode  = 'id';
+let _currentDetailTeamId = null;
+let _applyTargetTeamId   = null;
+const _matchContact   = { phone: '', kakao: '', name: '' };
 let _cachedTeams = [];
 
 async function loadTeams(filterVal) {
@@ -1366,7 +1372,7 @@ function renderTeamList() {
         <div class="empty-icon">🌸</div>
         <div class="empty-title">아직 등록된 팀이 없어요</div>
         <div class="empty-desc" style="margin-bottom:20px;">첫 번째로 팀을 등록하고 매칭의 주인공이 되어보세요!</div>
-        <button class="btn btn-primary" style="width:auto;padding:0 28px;" onclick="__app.switchTab('find')">팀 등록하기 →</button>
+        <button class="btn btn-primary" style="width:auto;padding:0 28px;" onclick="switchTab('find')">팀 등록하기 →</button>
       </div>`;
     return;
   }
@@ -1414,30 +1420,30 @@ function renderTeamList() {
     if (team.status === 'matched') {
       applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>🎉 매칭완료</button>`;
     } else if (isGuest) {
-      applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="__app.showAuthGateModal('apply')">💌 신청하기</button>`;
+      applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showAuthGateModal('apply')">💌 신청하기</button>`;
     } else if (isMale) {
       if (state.profile?.gender === 'female') {
-        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="__app.openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
+        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
       } else {
         applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👨 남성팀 (신청 불가)</button>`;
       }
     } else {
       if (state.profile?.gender === 'male') {
-        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="__app.openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
+        applyBtn = `<button class="btn btn-primary btn-sm" style="flex:1;" onclick="openApplyScreen('${esc(team.id)}')">💌 신청하기</button>`;
       } else {
         applyBtn = `<button class="btn btn-outline btn-sm" style="flex:1;cursor:default;opacity:0.5;" disabled>👩 여성팀 (신청 불가)</button>`;
       }
     }
 
     return `
-    <div class="team-card" style="${cardBorder}" onclick="__app.openTeamDetail('${esc(team.id)}')">
+    <div class="team-card" style="${cardBorder}" onclick="openTeamDetail('${esc(team.id)}')">
       ${team.is_verified ? `<div style="background:linear-gradient(90deg,#E8F5E9,#F1F8E9);
         padding:4px 12px;text-align:center;font-size:11px;font-weight:700;color:#388E3C;">
         ✅ 인증 완료 팀 — 우선 노출
       </div>` : ''}
       ${isGuest ? `<div style="background:#FFF8E1;padding:5px 12px;text-align:center;font-size:11px;color:#795548;">
         👀 구경 중 — 신청은 <span style="color:var(--pink);font-weight:700;cursor:pointer;"
-          onclick="event.stopPropagation();__app.showScreen('screen-register')">가입 후</span> 가능해요
+          onclick="event.stopPropagation();showScreen('screen-register')">가입 후</span> 가능해요
       </div>` : ''}
       <div class="team-card-header">
         <div class="team-avatar-group">
@@ -1462,7 +1468,7 @@ function renderTeamList() {
       <div class="team-card-footer">
         ${applyBtn}
         <button class="btn btn-outline btn-sm" style="width:80px;"
-          onclick="event.stopPropagation();__app.openTeamDetail('${esc(team.id)}')">상세보기</button>
+          onclick="event.stopPropagation();openTeamDetail('${esc(team.id)}')">상세보기</button>
       </div>
     </div>`;
   }).join('');
@@ -1488,7 +1494,7 @@ async function openTeamDetail(teamId) {
   if (!team) return;
 
   // 현재 상세보기 팀 ID 저장 (신청 버튼에서 참조)
-  window._currentDetailTeamId = teamId;
+  _currentDetailTeamId = teamId;
 
   // textContent로 안전하게 설정
   setText('detail-title', team.title);
@@ -1567,10 +1573,7 @@ async function registerTeam() {
   // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
   const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
   const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
-  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
-  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
-    showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
-  }
+  if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
@@ -1756,7 +1759,7 @@ async function submitReview() {
 async function openApplyScreen(teamId) {
   if (!state.profile) { showAuthGateModal('apply'); return; }
 
-  window._applyTargetTeamId = teamId;
+  _applyTargetTeamId = teamId;
 
   // 대상팀 이름 표시
   const targetTeam = _cachedTeams.find(t => t.id === teamId);
@@ -1847,7 +1850,7 @@ async function submitApply() {
   const profile = state.profile;
   if (!profile) { showToast('로그인이 필요합니다'); return; }
 
-  const targetTeamId = window._applyTargetTeamId;
+  const targetTeamId = _applyTargetTeamId;
   if (!targetTeamId) { showToast('신청 대상팀 정보가 없습니다. 팀 카드에서 다시 신청해주세요.'); return; }
 
   // _cachedTeams에서 먼저 찾고, 없으면 DB에서 직접 조회
@@ -2044,17 +2047,17 @@ async function loadAndRenderRequests(tab) {
         <div style="display:flex;gap:8px;">
           ${isMatched
             ? `<button class="btn btn-primary btn-sm" style="flex:1;"
-                onclick="__app.showMatchSuccess('${esc(r.id)}')">🎉 연결 정보 보기</button>`
+                onclick="showMatchSuccess('${esc(r.id)}')">🎉 연결 정보 보기</button>`
             : ''}
           ${isPendingRecv
             ? `<button class="btn btn-primary btn-sm" style="flex:1;"
-                onclick="__app.acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
+                onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
                <button class="btn btn-outline btn-sm" style="flex:1;"
-                onclick="__app.rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`
+                onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`
             : ''}
           ${!isMatched && !isPendingRecv
             ? `<button class="btn btn-outline btn-sm"
-                onclick="__app.switchTab('messages')">💬 후기</button>`
+                onclick="switchTab('messages')">💬 후기</button>`
             : ''}
         </div>
       </div>`;
@@ -2093,9 +2096,9 @@ async function showMatchSuccess(requestId, preloadedData) {
     if (phoneEl) phoneEl.textContent = preloadedData.phone || '미등록';
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = preloadedData.kakao || '미등록';
-    _matchContactPhone = preloadedData.phone || '';
-    _matchContactKakao = preloadedData.kakao || '';
-    _matchContactName  = preloadedData.teamName || '상대팀';
+    _matchContact.phone = preloadedData.phone || '';
+    _matchContact.kakao = preloadedData.kakao || '';
+    _matchContact.name  = preloadedData.teamName || '상대팀';
     return;
   }
 
@@ -2159,20 +2162,20 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
   if (oppTeam) {
     setText('match-success-team-name', oppTeam.title || '상대팀');
     const phoneEl = document.getElementById('match-contact-phone');
-    if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '미등록';
+    if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '미등록';  // 인스타ID
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = oppTeam.contact_kakao || '미등록';
-    _matchContactPhone = oppTeam.contact_phone || '';
-    _matchContactKakao = oppTeam.contact_kakao || '';
-    _matchContactName  = oppTeam.title || '상대팀';
+    _matchContact.phone = oppTeam.contact_phone || '';
+    _matchContact.kakao = oppTeam.contact_kakao || '';
+    _matchContact.name  = oppTeam.title || '상대팀';
   }
 }
 
 // 연락처 저장 (vCard 다운로드)
 function saveMatchContact() {
-  const phone = (_matchContactPhone || '').trim();
-  const kakao = (_matchContactKakao || '').trim();
-  const name  = (_matchContactName  || '상대팀').trim();
+  const phone = (_matchContact.phone || '').trim();
+  const kakao = (_matchContact.kakao || '').trim();
+  const name  = (_matchContact.name  || '상대팀').trim();
   if (!phone && !kakao) { showToast('저장할 연락처가 없습니다.'); return; }
 
   if (phone) {
@@ -2850,12 +2853,12 @@ async function switchAdminTab(tab, el) {
                 font-size:12px;color:var(--error);margin-bottom:6px;">반려 사유: ${esc(v.reject_reason)}</div>` : ''}
               <div style="display:flex;gap:6px;">
                 ${v.users?.id ? `<button class="btn btn-outline btn-sm"
-                  onclick="__app.openAdminUserDetail('${esc(v.users.id)}')">👤 프로필</button>` : ''}
+                  onclick="openAdminUserDetail('${esc(v.users.id)}')">👤 프로필</button>` : ''}
                 ${v.status === 'pending' ? `
                   <button class="btn btn-primary btn-sm" style="flex:1;"
-                    onclick="__app.adminApproveVerif('${esc(v.id)}','${esc(v.users?.id)}')">✅ 승인</button>
+                    onclick="adminApproveVerif('${esc(v.id)}','${esc(v.users?.id)}')">✅ 승인</button>
                   <button class="btn btn-danger btn-sm" style="flex:1;"
-                    onclick="__app.adminRejectVerif('${esc(v.id)}','${esc(v.users?.id)}')">❌ 반려</button>
+                    onclick="adminRejectVerif('${esc(v.id)}','${esc(v.users?.id)}')">❌ 반려</button>
                 ` : '<span style="font-size:12px;color:var(--gray-400);">처리 완료</span>'}
               </div>
             </div>`).join('')}
@@ -2907,12 +2910,12 @@ async function switchAdminTab(tab, el) {
               </div>
               <div style="display:flex;gap:6px;">
                 ${d.users?.id ? `<button class="btn btn-outline btn-sm"
-                  onclick="__app.openAdminUserDetail('${esc(d.users.id)}')">👤 프로필</button>` : ''}
+                  onclick="openAdminUserDetail('${esc(d.users.id)}')">👤 프로필</button>` : ''}
                 ${d.status === 'pending_confirm' ? `
                   <button class="btn btn-primary btn-sm" style="flex:1;"
-                    onclick="__app.adminConfirmDeposit('${esc(d.id)}','${esc(d.users?.id)}')">✅ 입금 확인</button>
+                    onclick="adminConfirmDeposit('${esc(d.id)}','${esc(d.users?.id)}')">✅ 입금 확인</button>
                   <button class="btn btn-danger btn-sm" style="flex:1;"
-                    onclick="__app.adminRejectDeposit('${esc(d.id)}')">❌ 반려</button>
+                    onclick="adminRejectDeposit('${esc(d.id)}')">❌ 반려</button>
                 ` : '<span style="font-size:12px;color:var(--gray-400);">처리 완료</span>'}
               </div>
             </div>`).join('')}
@@ -2948,11 +2951,11 @@ async function switchAdminTab(tab, el) {
               ${r.status === 'pending' ? `
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
                   ${r.target_user?.id ? `<button class="btn btn-outline btn-sm"
-                    onclick="__app.openAdminUserDetail('${esc(r.target_user.id)}')">👤 프로필</button>` : ''}
+                    onclick="openAdminUserDetail('${esc(r.target_user.id)}')">👤 프로필</button>` : ''}
                   <button class="btn btn-danger btn-sm"
-                    onclick="__app.adminBanUser('${esc(r.target_user?.id||'')}','${esc(r.id)}')">🚫 제재</button>
+                    onclick="adminBanUser('${esc(r.target_user?.id||'')}','${esc(r.id)}')">🚫 제재</button>
                   <button class="btn btn-outline btn-sm"
-                    onclick="__app.adminDismissReport('${esc(r.id)}')">기각</button>
+                    onclick="adminDismissReport('${esc(r.id)}')">기각</button>
                 </div>` : ''}
             </div>`).join('')}
       </div>`;
@@ -3031,12 +3034,12 @@ async function switchAdminTab(tab, el) {
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           ${r.status !== 'approved' ? `
             <button class="btn btn-primary btn-sm"
-              onclick="__app.adminApproveReview('${esc(r.id)}')">✅ 승인</button>` : ''}
+              onclick="adminApproveReview('${esc(r.id)}')">✅ 승인</button>` : ''}
           ${r.status !== 'rejected' ? `
             <button class="btn btn-danger btn-sm"
-              onclick="__app.adminRejectReview('${esc(r.id)}')">❌ 반려</button>` : ''}
+              onclick="adminRejectReview('${esc(r.id)}')">❌ 반려</button>` : ''}
           <button class="btn btn-outline btn-sm"
-            onclick="__app.adminDeleteReview('${esc(r.id)}')">🗑️ 삭제</button>
+            onclick="adminDeleteReview('${esc(r.id)}')">🗑️ 삭제</button>
         </div>
       </div>`;
 
@@ -3124,11 +3127,11 @@ async function switchAdminTab(tab, el) {
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
                   ${isRecruiting
                     ? `<button class="btn btn-outline btn-sm"
-                        onclick="__app.adminHideTeam('${esc(t.id)}')">⏸️ 숨김</button>`
+                        onclick="adminHideTeam('${esc(t.id)}')">⏸️ 숨김</button>`
                     : `<button class="btn btn-primary btn-sm"
-                        onclick="__app.adminRestoreTeam('${esc(t.id)}')">▶️ 복원</button>`}
+                        onclick="adminRestoreTeam('${esc(t.id)}')">▶️ 복원</button>`}
                   <button class="btn btn-danger btn-sm"
-                    onclick="__app.adminDeleteTeam('${esc(t.id)}')">🗑️ 삭제</button>
+                    onclick="adminDeleteTeam('${esc(t.id)}')">🗑️ 삭제</button>
                 </div>
               </div>`;
             }).join('')}
@@ -3143,7 +3146,7 @@ function renderAdminUserRow(u) {
   const VC = { pending:'chip-orange', approved:'chip-green', rejected:'chip-red' };
   const DC = { pending_confirm:'chip-orange', confirmed:'chip-green', rejected:'chip-red' };
   return `
-  <div class="admin-list-item" style="cursor:pointer;" onclick="__app.openAdminUserDetail('${esc(u.id)}')">
+  <div class="admin-list-item" style="cursor:pointer;" onclick="openAdminUserDetail('${esc(u.id)}')">
     <div style="display:flex;align-items:center;gap:10px;">
       <div style="width:44px;height:44px;min-width:44px;border-radius:50%;
         background:${u.is_banned?'var(--gray-300)':u.gender==='male'?'linear-gradient(135deg,#C77DFF,#7B2FF7)':'linear-gradient(135deg,#FF6B9D,#FF4D7D)'};
@@ -3177,7 +3180,7 @@ function renderAdminUserRow(u) {
 
 // 회원 검색 필터
 function filterAdminUsers(q) {
-  const users = window._adminUsers || [];
+  const users = _adminUsers || [];
   const filtered = q.trim()
     ? users.filter(u =>
         (u.nickname||'').toLowerCase().includes(q.toLowerCase()) ||
@@ -3274,25 +3277,25 @@ async function openAdminUserDetail(userId) {
         color:var(--gray-600);">👥 등록 팀</div>
       ${iRow('📛 팀 이름',    esc(myTeam.title||'-'))}
       ${iRow('📊 팀 상태',    {recruiting:'🟢 모집중',matched:'🎉 매칭완료',hidden:'⚫ 숨김'}[myTeam.status]||myTeam.status||'-')}
-      ${myTeam.contact_phone ? iRow('📞 팀 연락처', esc(myTeam.contact_phone)) : ''}
-      ${myTeam.contact_kakao ? iRow('💛 카카오 ID', esc(myTeam.contact_kakao)) : ''}
+      ${myTeam.contact_phone ? iRow('📸 인스타그램 ID', esc(myTeam.contact_phone)) : ''}
+      ${myTeam.contact_kakao ? iRow('💬 카카오톡 ID', esc(myTeam.contact_kakao)) : ''}
       ${iRow('📅 팀 등록일', myTeam.created_at ? new Date(myTeam.created_at).toLocaleDateString('ko-KR') : '-')}
     </div>` : ''}
 
     <!-- 관리 버튼 -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
       ${!u.is_banned
-        ? `<button class="btn btn-danger btn-sm" onclick="__app.adminBanUser('${esc(u.id)}',null)">🚫 이용 제한</button>`
-        : `<button class="btn btn-primary btn-sm" onclick="__app.adminUnbanUser('${esc(u.id)}')">✅ 제재 해제</button>`}
+        ? `<button class="btn btn-danger btn-sm" onclick="adminBanUser('${esc(u.id)}',null)">🚫 이용 제한</button>`
+        : `<button class="btn btn-primary btn-sm" onclick="adminUnbanUser('${esc(u.id)}')">✅ 제재 해제</button>`}
       ${u.profile_active
-        ? `<button class="btn btn-outline btn-sm" onclick="__app.adminDeactivateUser('${esc(u.id)}')">⏸️ 비활성화</button>`
-        : `<button class="btn btn-secondary btn-sm" onclick="__app.adminActivateUser('${esc(u.id)}')">▶️ 활성화</button>`}
+        ? `<button class="btn btn-outline btn-sm" onclick="adminDeactivateUser('${esc(u.id)}')">⏸️ 비활성화</button>`
+        : `<button class="btn btn-secondary btn-sm" onclick="adminActivateUser('${esc(u.id)}')">▶️ 활성화</button>`}
     </div>
     <button class="btn btn-danger btn-sm"
       style="width:100%;margin-bottom:8px;background:#B71C1C;"
-      onclick="__app.adminDeleteUser('${esc(u.id)}')">🗑️ 회원 완전 삭제</button>
+      onclick="adminDeleteUser('${esc(u.id)}')">🗑️ 회원 완전 삭제</button>
     <button class="btn btn-outline btn-sm" style="width:100%;"
-      onclick="__app.closeModal('modal-admin-user')">닫기</button>`;
+      onclick="closeModal('modal-admin-user')">닫기</button>`;
 
   document.getElementById('modal-admin-user')?.classList.add('show');
 }
@@ -3659,7 +3662,7 @@ function renderPreviewTeamList() {
       </div>
       <div class="team-card-footer">
         <button class="btn btn-primary btn-sm" style="flex:1;"
-          onclick="event.stopPropagation();__app.showScreen('screen-register')">💌 가입하고 신청하기</button>
+          onclick="event.stopPropagation();showScreen('screen-register')">💌 가입하고 신청하기</button>
       </div>
     </div>`).join('');
 }
@@ -3746,7 +3749,7 @@ function toggleAll(el) {
         ${isLeader
           ? '<span class="chip chip-pink">팀장</span><span class="chip chip-green">✅ 인증완료</span>'
           : `<span class="chip chip-orange" id="verif-status-${i}">⚠️ 미확인</span>
-             <button type="button" onclick="__app.toggleMemberCard(${i})"
+             <button type="button" onclick="toggleMemberCard(${i})"
                id="toggle-btn-${i}"
                style="background:none;border:none;font-size:18px;cursor:pointer;padding:0 4px;color:var(--gray-400);">＋</button>`}
       </div>
@@ -3819,12 +3822,12 @@ function toggleAll(el) {
     <div class="card card-p" style="margin-bottom:12px;">
       <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
+        매칭 성사 시 상대팀에게만 공개됩니다. 인스타그램 ID는 필수입니다.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">전화번호</label>
-        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
-          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
+        <label class="form-label">인스타그램 ID <span class="required">*</span></label>
+        <input class="form-input" type="text" id="contact-phone" style="height:48px;"
+          placeholder="인스타그램 아이디 (@제외)" maxlength="50" autocomplete="off">
       </div>
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
@@ -4010,147 +4013,219 @@ function howToStep(num, emoji, title, desc, bullets = []) {
 }
 
 // ============================================================
-// 31. 앱 시작
-// ============================================================
-initApp();
-// ============================================================
-// 이벤트 바인딩 — onclick 제거 후 addEventListener로 연결
+// 31. 이벤트 바인딩
 // ============================================================
 function bindEvents() {
-  // 버튼 직접 연결
-  document.getElementById('btn-login-submit')?.addEventListener('click', doLogin);
-  document.getElementById('btn-admin-login-submit')?.addEventListener('click', doAdminLogin);
-  document.getElementById('btn-logout')?.addEventListener('click', doLogout);
-  document.getElementById('btn-do-withdraw')?.addEventListener('click', doWithdraw);
+  // 랜딩
+  document.getElementById('btn-go-register')?.addEventListener('click', () => showScreen('screen-register'));
+  document.getElementById('btn-go-login')?.addEventListener('click', () => showScreen('screen-login'));
   document.getElementById('btn-guest-browse')?.addEventListener('click', enterGuestBrowse);
-  document.getElementById('btn-go-verify')?.addEventListener('click', goToVerification);
-  document.getElementById('btn-submit-verif')?.addEventListener('click', submitVerification);
-  document.getElementById('btn-submit-deposit')?.addEventListener('click', submitDeposit);
-  document.getElementById('btn-submit-review-form')?.addEventListener('click', submitReview);
-  document.getElementById('btn-submit-apply-form')?.addEventListener('click', submitApply);
-  document.getElementById('btn-register-team-form')?.addEventListener('click', registerTeam);
-  document.getElementById('btn-save-match-contact')?.addEventListener('click', saveMatchContact);
-  document.getElementById('btn-save-badge')?.addEventListener('click', saveCustomBadge);
-  document.getElementById('btn-confirm-delete-team')?.addEventListener('click', confirmDeleteMyTeam);
-  document.getElementById('btn-confirm-unverified')?.addEventListener('click', confirmUnverifiedTeam);
-  document.getElementById('btn-trigger-upload')?.addEventListener('click', triggerUpload);
+  document.getElementById('btn-go-admin-login')?.addEventListener('click', () => showScreen('screen-admin-login'));
+
+  // 로그인 화면
+  document.getElementById('btn-login')?.addEventListener('click', doLogin);
+  document.getElementById('btn-back-login')?.addEventListener('click', () => showScreen('screen-landing'));
+  document.getElementById('btn-go-register-from-login')?.addEventListener('click', () => showScreen('screen-register'));
+  document.getElementById('btn-go-preview-from-login')?.addEventListener('click', () => showScreen('screen-preview'));
+  document.getElementById('btn-show-find-id')?.addEventListener('click', () => showFindAccountModal('id'));
+  document.getElementById('btn-show-find-pw')?.addEventListener('click', () => showFindAccountModal('pw'));
+  document.getElementById('btn-find-account-submit')?.addEventListener('click', () => doFindAccount(_findAccountMode));
+
+  // 회원가입
+  document.getElementById('btn-back-register')?.addEventListener('click', () => showScreen('screen-landing'));
+  document.getElementById('btn-show-terms')?.addEventListener('click', () => showTerms('terms'));
+  document.getElementById('btn-show-privacy')?.addEventListener('click', () => showTerms('privacy'));
+  document.getElementById('btn-go-verification')?.addEventListener('click', goToVerification);
+
+  // 학생증 인증
+  document.getElementById('btn-back-verification')?.addEventListener('click', () => showScreen('screen-register'));
+  document.getElementById('upload-zone')?.addEventListener('click', triggerUpload);
+  document.getElementById('btn-verify')?.addEventListener('click', submitVerification);
+  document.getElementById('btn-skip-verify')?.addEventListener('click', () => showScreen('screen-pending'));
+
+  // 대기 화면
+  document.getElementById('btn-go-deposit-from-pending')?.addEventListener('click', () => showScreen('screen-deposit'));
+  document.getElementById('btn-go-preview-from-pending')?.addEventListener('click', () => showScreen('screen-preview'));
+
+  // 입금
+  document.getElementById('btn-deposit')?.addEventListener('click', submitDeposit);
+  document.getElementById('btn-show-refund')?.addEventListener('click', () => showTerms('refund'));
+
+  // 팀 상세
+  document.getElementById('btn-back-team-detail')?.addEventListener('click', () => showScreen('screen-home'));
+  document.getElementById('btn-report-from-detail')?.addEventListener('click', showReportNotice);
+  document.getElementById('btn-apply-from-detail')?.addEventListener('click', () => {
+    if (!state.profile) { showAuthGateModal('apply'); return; }
+    const team = _cachedTeams.find(t => t.id === _currentDetailTeamId);
+    if (!team) { showToast('팀 정보를 찾을 수 없습니다.'); return; }
+    const pg = state.profile.gender;
+    const tg = team.gender;
+    if (pg === 'male' && tg !== 'female') { showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return; }
+    if (pg === 'female' && tg !== 'male') { showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return; }
+    openApplyScreen(_currentDetailTeamId);
+  });
+  document.getElementById('btn-chat-from-detail')?.addEventListener('click', () => {
+    state.profile ? showToast('💬 메시지를 보내기 전 신청을 먼저 해주세요') : showAuthGateModal('message');
+  });
+
+  // 신청 완료 버튼 (동적으로 보이므로 위임)
+  document.getElementById('btn-submit-apply')?.addEventListener('click', submitApply);
+
+  // 탭바 (여러 화면에 있으므로 이벤트 위임)
+  document.addEventListener('click', e => {
+    const tabBtn = e.target.closest('[data-tab]');
+    if (tabBtn) {
+      e.preventDefault();
+      switchTab(tabBtn.dataset.tab);
+    }
+  });
+
+  // 필터 칩 (이벤트 위임)
+  document.addEventListener('click', e => {
+    const chip = e.target.closest('.filter-chip[data-filter]');
+    if (chip) {
+      e.preventDefault();
+      filterTeams(chip, chip.dataset.filter);
+    }
+  });
+
+  // 신청내역 탭 전환
+  document.getElementById('tab-sent')?.addEventListener('click', () => switchRequestTab('sent'));
+  document.getElementById('tab-received')?.addEventListener('click', () => switchRequestTab('received'));
+
+  // 매칭 성공 화면
+  document.getElementById('btn-save-contact')?.addEventListener('click', saveMatchContact);
+  document.getElementById('btn-back-from-match')?.addEventListener('click', () => showScreen('screen-requests'));
+  document.getElementById('btn-report-from-match')?.addEventListener('click', showReportNotice);
+
+  // 팀 등록
+  document.getElementById('btn-back-team-register')?.addEventListener('click', () => showScreen('screen-home'));
+  document.getElementById('btn-team-register')?.addEventListener('click', registerTeam);
+  document.getElementById('btn-save-custom-badge')?.addEventListener('click', saveCustomBadge);
+
+  // 마이페이지 메뉴
+  document.getElementById('menu-team-register')?.addEventListener('click', () => showScreen('screen-team-register'));
+  document.getElementById('menu-delete-team')?.addEventListener('click', confirmDeleteMyTeam);
+  document.getElementById('menu-deposit')?.addEventListener('click', () => showScreen('screen-deposit'));
+  document.getElementById('menu-verification')?.addEventListener('click', () => showScreen('screen-verification'));
+  document.getElementById('menu-report')?.addEventListener('click', showReportNotice);
+  document.getElementById('menu-terms')?.addEventListener('click', () => showTerms('terms'));
+  document.getElementById('menu-privacy')?.addEventListener('click', () => showTerms('privacy'));
+  document.getElementById('menu-refund')?.addEventListener('click', () => showTerms('refund'));
+  document.getElementById('menu-community')?.addEventListener('click', () => showTerms('community'));
+  document.getElementById('menu-withdraw')?.addEventListener('click', showWithdraw);
+  document.getElementById('menu-logout')?.addEventListener('click', doLogout);
+  document.getElementById('menu-go-admin')?.addEventListener('click', () => { showScreen('screen-admin'); renderAdminDashboard(); });
+
+  // 후기 작성
+  document.getElementById('btn-write-review')?.addEventListener('click', () => document.getElementById('modal-review-write')?.classList.add('show'));
+  document.getElementById('btn-submit-review')?.addEventListener('click', submitReview);
+  document.getElementById('btn-cancel-review')?.addEventListener('click', () => closeModal('modal-review-write'));
+
+  // 관리자 로그인
+  document.getElementById('btn-admin-login')?.addEventListener('click', doAdminLogin);
+  document.getElementById('btn-back-admin-login')?.addEventListener('click', () => showScreen('screen-landing'));
+  document.getElementById('btn-admin-logout')?.addEventListener('click', doLogout);
+
+  // 관리자 탭 (이벤트 위임)
+  document.addEventListener('click', e => {
+    const adminTabBtn = e.target.closest('[data-admin-tab]');
+    if (adminTabBtn) switchAdminTab(adminTabBtn.dataset.adminTab, adminTabBtn);
+  });
+
+  // 관리자 대시보드 통계 카드 클릭 (이벤트 위임)
+  document.addEventListener('click', e => {
+    const statCard = e.target.closest('[data-admin-switch-tab]');
+    if (statCard) switchAdminTab(statCard.dataset.adminSwitchTab, null);
+  });
+
+  // 관리자 동적 버튼 이벤트 위임
+  document.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-admin-action]');
+    if (!btn) return;
+    const action = btn.dataset.adminAction;
+    const id  = btn.dataset.id  || null;
+    const uid = btn.dataset.uid || null;
+    const rid = btn.dataset.rid || null;
+    switch (action) {
+      case 'approve-verif':   await adminApproveVerif(id, uid); break;
+      case 'reject-verif':    await adminRejectVerif(id, uid); break;
+      case 'confirm-deposit': await adminConfirmDeposit(id, uid); break;
+      case 'reject-deposit':  await adminRejectDeposit(id); break;
+      case 'ban-user':        await adminBanUser(uid, rid); break;
+      case 'unban-user':      await adminUnbanUser(uid); break;
+      case 'dismiss-report':  await adminDismissReport(id); break;
+      case 'approve-review':  await adminApproveReview(id); break;
+      case 'reject-review':   await adminRejectReview(id); break;
+      case 'delete-review':   await adminDeleteReview(id); break;
+      case 'hide-team':       await adminHideTeam(id); break;
+      case 'restore-team':    await adminRestoreTeam(id); break;
+      case 'delete-team':     await adminDeleteTeam(id); break;
+      case 'activate-user':   await adminActivateUser(uid); break;
+      case 'deactivate-user': await adminDeactivateUser(uid); break;
+      case 'delete-user':     await adminDeleteUser(uid); break;
+      case 'ban-from-detail': await adminBanUser(uid, null); break;
+      case 'close-admin-user-modal': closeModal('modal-admin-user'); break;
+    }
+  });
+
+  // 인증 게이트 모달
+  document.getElementById('btn-auth-gate-register')?.addEventListener('click', () => { closeModal('modal-auth-gate'); showScreen('screen-register'); });
+  document.getElementById('btn-auth-gate-login')?.addEventListener('click', () => { closeModal('modal-auth-gate'); showScreen('screen-login'); });
+  document.getElementById('btn-auth-gate-close')?.addEventListener('click', () => closeModal('modal-auth-gate'));
+
+  // 신고 모달
   document.getElementById('btn-copy-report-email')?.addEventListener('click', copyReportEmail);
-  document.getElementById('btn-show-report-notice')?.addEventListener('click', showReportNotice);
-  document.getElementById('btn-show-withdraw')?.addEventListener('click', showWithdraw);
-  document.getElementById('btn-close-report-modal')?.addEventListener('click', () => closeModal('modal-report-write'));
-  document.getElementById('btn-close-review-modal')?.addEventListener('click', () => closeModal('modal-review-write'));
-  document.getElementById('btn-how-to-use')?.addEventListener('click', showHowToUse);
-  document.getElementById('btn-check-username')?.addEventListener('click', checkUsernameBtn);
-  document.getElementById('btn-find-account')?.addEventListener('click', showFindAccountModal);
-  document.getElementById('btn-forgot-pw')?.addEventListener('click', showForgotPasswordModal);
-  document.getElementById('btn-do-find-account')?.addEventListener('click', doFindAccount);
-  document.getElementById('btn-do-forgot-pw')?.addEventListener('click', doForgotPassword);
-  document.getElementById('btn-submit-report-form')?.addEventListener('click', submitReport);
-  document.getElementById('btn-open-review-modal')?.addEventListener('click', () => document.getElementById('modal-review-write')?.classList.add('show'));
-  document.getElementById('btn-goto-admin')?.addEventListener('click', () => { showScreen('screen-admin'); renderAdminDashboard(); });
-  document.getElementById('btn-authgate-register')?.addEventListener('click', () => { closeModal('modal-auth-gate'); showScreen('screen-register'); });
-  document.getElementById('btn-authgate-login')?.addEventListener('click', () => { closeModal('modal-auth-gate'); showScreen('screen-login'); });
-  document.getElementById('btn-history-back')?.addEventListener('click', () => history.back());
+  document.getElementById('btn-close-report')?.addEventListener('click', () => closeModal('modal-report'));
 
-  // data-goto — 화면 전환
-  document.querySelectorAll('[data-goto]').forEach(el => {
-    el.addEventListener('click', () => showScreen(el.dataset.goto));
-  });
+  // 약관 모달
+  document.getElementById('btn-close-terms')?.addEventListener('click', () => closeModal('modal-terms'));
 
-  // data-tab — 탭 전환
-  document.querySelectorAll('[data-tab]').forEach(el => {
-    el.addEventListener('click', () => switchTab(el.dataset.tab));
-  });
+  // 탈퇴 모달
+  document.getElementById('btn-cancel-withdraw')?.addEventListener('click', () => closeModal('modal-withdraw'));
+  document.getElementById('btn-confirm-withdraw')?.addEventListener('click', doWithdraw);
+  document.getElementById('link-refund-in-withdraw')?.addEventListener('click', () => showTerms('refund'));
 
-  // data-admintab — 관리자 탭
-  document.querySelectorAll('[data-admintab]').forEach(el => {
-    el.addEventListener('click', () => switchAdminTab(el.dataset.admintab, el));
-  });
+  // 팀 미인증 확인 모달
+  document.getElementById('btn-cancel-unverified')?.addEventListener('click', () => closeModal('team-unverified-confirm'));
+  document.getElementById('btn-confirm-unverified')?.addEventListener('click', confirmUnverifiedTeam);
 
-  // data-reqtab — 신청 탭
-  document.querySelectorAll('[data-reqtab]').forEach(el => {
-    el.addEventListener('click', () => switchRequestTab(el.dataset.reqtab, el));
-  });
+  // 관리자 유저 모달 닫기
+  document.getElementById('btn-close-admin-user-modal')?.addEventListener('click', () => closeModal('modal-admin-user'));
 
-  // data-filter — 팀 필터
-  document.querySelectorAll('[data-filter]').forEach(el => {
-    el.addEventListener('click', () => filterTeams(el, el.dataset.filter));
-  });
+  // 미리보기 화면
+  document.getElementById('btn-preview-register')?.addEventListener('click', () => showScreen('screen-register'));
+  document.getElementById('btn-preview-login')?.addEventListener('click', () => showScreen('screen-login'));
+  document.getElementById('btn-preview-register-bottom')?.addEventListener('click', () => showScreen('screen-register'));
 
-  // data-terms — 약관
-  document.querySelectorAll('[data-terms]').forEach(el => {
-    el.addEventListener('click', () => showTerms(el.dataset.terms));
-  });
+  // 알림벨
+  document.getElementById('btn-notif-bell')?.addEventListener('click', () => showToast('알림이 없습니다'));
 
-  // data-authgate — 인증 게이트
-  document.querySelectorAll('[data-authgate]').forEach(el => {
-    el.addEventListener('click', () => showAuthGateModal(el.dataset.authgate));
-  });
+  // 파일 입력
+  document.getElementById('file-input')?.addEventListener('change', function() { handleFileSelect(this); });
 
-  // data-closemodal — 모달 닫기
-  document.querySelectorAll('[data-closemodal]').forEach(el => {
-    el.addEventListener('click', () => closeModal(el.dataset.closemodal));
-  });
+  // 전체 동의 체크박스
+  document.getElementById('chk-all')?.addEventListener('change', function() { toggleAll(this); });
 
-  // data-toast — 토스트
-  document.querySelectorAll('[data-toast]').forEach(el => {
-    el.addEventListener('click', () => showToast(el.dataset.toast));
-  });
-
-  // onchange 연결
-  document.getElementById('verif-upload')?.addEventListener('change', handleFileSelect);
-  document.getElementById('reg-username')?.addEventListener('input', onUsernameInput);
+  // 추가 버튼들
+  document.getElementById('btn-reupload-verif')?.addEventListener('click', () => showScreen('screen-verification'));
+  document.getElementById('btn-back-messages')?.addEventListener('click', () => showScreen('screen-home'));
+  document.getElementById('btn-back-admin')?.addEventListener('click', () => history.back());
+  document.getElementById('btn-home-banner-register')?.addEventListener('click', () => showScreen('screen-register'));
+  document.getElementById('btn-go-team-register-empty')?.addEventListener('click', () => showScreen('screen-team-register'));
+  document.getElementById('btn-back-deposit')?.addEventListener('click', () => history.back());
+  document.getElementById('btn-back-preview')?.addEventListener('click', () => showScreen('screen-landing'));
+  document.getElementById('btn-back-apply')?.addEventListener('click', () => showScreen('screen-team-detail'));
+  document.getElementById('btn-back-from-match-2')?.addEventListener('click', () => showScreen('screen-requests'));
+  document.getElementById('btn-go-register-from-login')?.addEventListener('click', () => showScreen('screen-register'));
 }
 
-
+// ============================================================
+// 32. 앱 시작
+// ============================================================
 document.addEventListener('DOMContentLoaded', () => {
+  initBirthYear();
   bindEvents();
+  initApp();
 });
-
-// ============================================================
-// __app 네임스페이스 — 동적 렌더링(innerHTML)용 최소 노출
-// ============================================================
-window.__app = {
-  showScreen,
-  switchTab,
-  openApplyScreen,
-  openTeamDetail,
-  showMatchContactDirect,
-  acceptMatchRequest,
-  rejectMatchRequest,
-  showMatchSuccess,
-  submitApply,
-  filterTeams,
-  switchAdminTab,
-  switchRequestTab,
-  switchChatTeam,
-  adminApproveVerif,
-  adminRejectVerif,
-  adminConfirmDeposit,
-  adminRejectDeposit,
-  adminBanUser,
-  adminUnbanUser,
-  adminDeleteUser,
-  adminActivateUser,
-  adminDeactivateUser,
-  adminHideTeam,
-  adminRestoreTeam,
-  adminDeleteTeam,
-  adminDismissReport,
-  adminApproveReview,
-  adminRejectReview,
-  adminDeleteReview,
-  adminApproveTeam,
-  adminRejectTeam,
-  openAdminUserDetail,
-  toggleMemberCard,
-  handleVerifConfirm,
-  closeModal,
-  showReport,
-  showTerms,
-  showHowToUse,
-  filterAdminUsers,
-  doFindAccount,
-  closeModal,
-  showScreen,
-};
+})(); // end IIFE
