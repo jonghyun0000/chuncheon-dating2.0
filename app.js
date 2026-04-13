@@ -846,8 +846,8 @@ async function goToVerification() {
     showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
-  if (!phoneNum || !/^[a-zA-Z0-9._]{2,50}$/.test(phoneNum)) {
-    showToast('카카오톡 ID를 입력해주세요 (영문·숫자 2자 이상)'); return;
+  if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호를 올바르게 입력해주세요 (예: 010-0000-0000)'); return;
   }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
@@ -1568,9 +1568,7 @@ async function registerTeam() {
     if (!dept || dept.length < 2)     { showToast(`팀원 ${i}의 학과를 입력해주세요`); return; }
 
     if (i > 1) {
-      if (!document.getElementById(`verif-confirm-${i}`)?.checked) {
-        showToast(`팀원 ${i}의 인증 확인 체크박스를 체크해주세요`); return;
-      }
+      // 인증 확인 체크박스 — 선택사항
     }
 
     const smoking = document.querySelector(`input[name="smoke${i}"]:checked`)?.id === `s${i}`;
@@ -1590,10 +1588,7 @@ async function registerTeam() {
   // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
   const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
   const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
-  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
-  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
-    showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
-  }
+  if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
@@ -2268,12 +2263,12 @@ async function acceptMatchRequest(requestId) {
       }
     }
 
-    // 양쪽 팀 status → matched, is_visible → false
-    const teamIds = [reqBefore?.male_team_id, reqBefore?.female_team_id].filter(Boolean);
-    if (teamIds.length > 0) {
-      await _sb.from('teams')
-        .update({ status: 'matched', is_visible: false })
-        .in('id', teamIds);
+    // ★ 양쪽 팀 각각 개별 숨김 (.in()은 RLS에서 일부만 적용될 수 있음)
+    if (reqBefore?.male_team_id) {
+      await _sb.from('teams').update({ status: 'matched', is_visible: false }).eq('id', reqBefore.male_team_id);
+    }
+    if (reqBefore?.female_team_id) {
+      await _sb.from('teams').update({ status: 'matched', is_visible: false }).eq('id', reqBefore.female_team_id);
     }
 
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
@@ -3326,8 +3321,8 @@ async function openAdminUserDetail(userId) {
         color:var(--gray-600);">👥 등록 팀</div>
       ${iRow('📛 팀 이름',    esc(myTeam.title||'-'))}
       ${iRow('📊 팀 상태',    {recruiting:'🟢 모집중',matched:'🎉 매칭완료',hidden:'⚫ 숨김'}[myTeam.status]||myTeam.status||'-')}
-      ${myTeam.contact_phone ? iRow('📞 팀 연락처', esc(myTeam.contact_phone)) : ''}
-      ${myTeam.contact_kakao ? iRow('💛 카카오 ID', esc(myTeam.contact_kakao)) : ''}
+      ${myTeam.contact_phone ? iRow('📸 인스타그램 ID', esc(myTeam.contact_phone)) : ''}
+      ${myTeam.contact_kakao ? iRow('💬 카카오톡 ID', esc(myTeam.contact_kakao)) : ''}
       ${iRow('📅 팀 등록일', myTeam.created_at ? new Date(myTeam.created_at).toLocaleDateString('ko-KR') : '-')}
     </div>` : ''}
 
@@ -3893,12 +3888,12 @@ window.toggleAll = toggleAll;
     <div class="card card-p" style="margin-bottom:12px;">
       <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
+        매칭 성사 시 상대팀에게만 공개됩니다. 인스타그램 ID는 필수입니다.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">전화번호</label>
-        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
-          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
+        <label class="form-label">인스타그램 ID <span class="required">*</span></label>
+        <input class="form-input" type="text" id="contact-phone" style="height:48px;"
+          placeholder="인스타그램 아이디 (@제외)" maxlength="50" autocomplete="off">
       </div>
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
