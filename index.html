@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -968,7 +968,7 @@
           </div>
           <div style="display:flex;align-items:center;gap:12px;background:white;border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--gray-100);">
             <div style="width:28px;height:28px;background:var(--pink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;font-weight:700;flex-shrink:0;">2</div>
-            <div><p style="font-size:13px;font-weight:700;margin-bottom:1px;">이용료 입금</p><p style="font-size:11px;color:var(--gray-500);">남성 5,000원 · 여성 3,000원</p></div>
+            <div><p style="font-size:13px;font-weight:700;margin-bottom:1px;">이용료 입금</p><p style="font-size:11px;color:var(--gray-500);">남성 3,000원 · 여성 1,000원</p></div>
           </div>
           <div style="display:flex;align-items:center;gap:12px;background:white;border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--gray-100);">
             <div style="width:28px;height:28px;background:var(--pink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;font-weight:700;flex-shrink:0;">3</div>
@@ -982,10 +982,10 @@
       </div>
 
       <div class="landing-cta">
-        <button class="btn btn-primary" onclick="showScreen('screen-register')">지금 시작하기 💌</button>
-        <button class="btn btn-outline" onclick="showScreen('screen-login')">이미 계정이 있어요</button>
-        <button class="btn btn-ghost" style="color:var(--gray-600);font-weight:500;" onclick="enterGuestBrowse()">👀 로그인 없이 팀 구경하기</button>
-        <p class="landing-login-link" onclick="showScreen('screen-admin-login')">관리자 로그인</p>
+        <button class="btn btn-primary" data-goto="screen-register">지금 시작하기 💌</button>
+        <button class="btn btn-outline" data-goto="screen-login">이미 계정이 있어요</button>
+        <button class="btn btn-ghost" style="color:var(--gray-600);font-weight:500;" id="btn-guest-browse">👀 로그인 없이 팀 구경하기</button>
+        <p class="landing-login-link" data-goto="screen-admin-login">관리자 로그인</p>
       </div>
     </div>
   </div>
@@ -993,7 +993,7 @@
   <!-- ───── LOGIN ───── -->
   <div class="screen" id="screen-login" style="flex-direction:column;">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-landing')">←</button>
+      <button class="btn-back" data-goto="screen-landing">←</button>
       <span class="header-logo">춘천 과팅</span>
       <div style="width:36px;"></div>
     </div>
@@ -1010,16 +1010,16 @@
         <input class="form-input" id="login-pw" type="password" placeholder="비밀번호 입력" autocomplete="current-password">
       </div>
       <div style="margin-bottom:24px;"></div>
-      <button class="btn btn-primary" id="btn-login" onclick="doLogin()">로그인</button>
+      <button class="btn btn-primary" id="btn-login" id="btn-login-submit">로그인</button>
       <div style="text-align:center;margin-top:20px;">
         <span style="font-size:14px;color:var(--gray-500);">계정이 없으신가요? </span>
-        <span style="font-size:14px;color:var(--pink);font-weight:600;cursor:pointer;" onclick="showScreen('screen-register')">회원가입</span>
+        <span style="font-size:14px;color:var(--pink);font-weight:600;cursor:pointer;" data-goto="screen-register">회원가입</span>
       </div>
       <div style="text-align:center;margin-top:12px;">
         <span style="font-size:13px;color:var(--gray-400);cursor:pointer;">비밀번호를 잊으셨나요?</span>
       </div>
       <div style="text-align:center;margin-top:20px;">
-        <span style="font-size:13px;color:var(--purple);font-weight:600;cursor:pointer;" onclick="showScreen('screen-preview')">👀 가입 전 미리보기</span>
+        <span style="font-size:13px;color:var(--purple);font-weight:600;cursor:pointer;" data-goto="screen-preview">👀 가입 전 미리보기</span>
       </div>
     </div>
   </div>
@@ -1027,7 +1027,7 @@
   <!-- ───── REGISTER ───── -->
   <div class="screen" id="screen-register">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-landing')">←</button>
+      <button class="btn-back" data-goto="screen-landing">←</button>
       <span class="header-title">회원가입</span>
       <span style="font-size:12px;color:var(--gray-400);">1/3</span>
     </div>
@@ -1165,12 +1165,12 @@
         <label class="checkbox-item">
           <input type="checkbox" class="required-agree">
           <span class="checkbox-box"></span>
-          <span class="checkbox-text">[필수] <span class="checkbox-link" onclick="showTerms('terms')">서비스 이용약관</span>에 동의합니다</span>
+          <span class="checkbox-text">[필수] <span class="checkbox-link" data-terms="terms">서비스 이용약관</span>에 동의합니다</span>
         </label>
         <label class="checkbox-item">
           <input type="checkbox" class="required-agree">
           <span class="checkbox-box"></span>
-          <span class="checkbox-text">[필수] <span class="checkbox-link" onclick="showTerms('privacy')">개인정보 수집·이용</span>에 동의합니다</span>
+          <span class="checkbox-text">[필수] <span class="checkbox-link" data-terms="privacy">개인정보 수집·이용</span>에 동의합니다</span>
         </label>
         <label class="checkbox-item">
           <input type="checkbox" class="required-agree">
@@ -1195,7 +1195,7 @@
       </div>
       
       <div style="margin-top:24px;">
-        <button class="btn btn-primary" onclick="goToVerification()">다음: 학생증 업로드 →</button>
+        <button class="btn btn-primary" id="btn-go-verify">다음: 학생증 업로드 →</button>
       </div>
     </div>
   </div>
@@ -1203,7 +1203,7 @@
   <!-- ───── VERIFICATION ───── -->
   <div class="screen" id="screen-verification">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-register')">←</button>
+      <button class="btn-back" data-goto="screen-register">←</button>
       <span class="header-title">학생 인증</span>
       <span style="font-size:12px;color:var(--gray-400);">2/3</span>
     </div>
@@ -1230,7 +1230,7 @@
         </div>
       </div>
 
-      <div onclick="triggerUpload()" style="border: 2px dashed var(--pink-light); border-radius: var(--radius-lg); padding: 48px 24px; text-align: center; cursor: pointer; background: var(--pink-soft); transition: all 0.2s;" id="upload-zone">
+      <div id="btn-trigger-upload" style="border: 2px dashed var(--pink-light); border-radius: var(--radius-lg); padding: 48px 24px; text-align: center; cursor: pointer; background: var(--pink-soft); transition: all 0.2s;" id="upload-zone">
         <div style="font-size:48px;margin-bottom:12px;" id="upload-icon">📷</div>
         <p style="font-size:16px;font-weight:600;color:var(--pink);margin-bottom:4px;" id="upload-title">이미지 업로드</p>
         <p style="font-size:13px;color:var(--gray-500);" id="upload-sub">터치하여 학생증 선택</p>
@@ -1243,8 +1243,8 @@
       </div>
 
       <div style="margin-top:24px;">
-        <button class="btn btn-primary" id="btn-verify" onclick="submitVerification()">업로드 완료</button>
-        <button class="btn btn-ghost" style="margin-top:8px;" onclick="showScreen('screen-pending')">나중에 하기</button>
+        <button class="btn btn-primary" id="btn-verify" id="btn-submit-verif">업로드 완료</button>
+        <button class="btn btn-ghost" style="margin-top:8px;" data-goto="screen-pending">나중에 하기</button>
       </div>
     </div>
   </div>
@@ -1273,8 +1273,8 @@
             ⬜ 서비스 시작
           </p>
         </div>
-        <button class="btn btn-secondary" onclick="showScreen('screen-deposit')">입금 먼저 하기</button>
-        <button class="btn btn-ghost" style="margin-top:8px;color:var(--purple);" onclick="showScreen('screen-preview')">👀 미리보기로 둘러보기</button>
+        <button class="btn btn-secondary" data-goto="screen-deposit">입금 먼저 하기</button>
+        <button class="btn btn-ghost" style="margin-top:8px;color:var(--purple);" data-goto="screen-preview">👀 미리보기로 둘러보기</button>
       </div>
 
       <!-- 반려 케이스 예시 (실제 서비스에선 조건부 표시) -->
@@ -1283,7 +1283,7 @@
           <div class="status-emoji">❌</div>
           <div class="status-title" style="color:var(--error);">인증이 반려되었습니다</div>
           <div class="status-desc" style="margin-bottom:16px;">반려 사유: <strong>이미지가 흐려 소속 대학교를 확인할 수 없습니다.</strong></div>
-          <button class="btn btn-primary" onclick="showScreen('screen-verification')">재업로드하기</button>
+          <button class="btn btn-primary" data-goto="screen-verification">재업로드하기</button>
         </div>
       </div>
     </div>
@@ -1292,7 +1292,7 @@
   <!-- ───── DEPOSIT ───── -->
   <div class="screen" id="screen-deposit">
     <div class="header">
-      <button class="btn-back" onclick="history.back()">←</button>
+      <button class="btn-back" id="btn-history-back">←</button>
       <span class="header-title">입금 안내</span>
       <span style="font-size:12px;color:var(--gray-400);">3/3</span>
     </div>
@@ -1305,15 +1305,15 @@
       <div class="deposit-account-card">
         <div class="deposit-bank">신한은행</div>
         <div class="deposit-account-num">110-498-811897</div>
-        <div class="deposit-holder">예금주: 이*현</div>
+        <div class="deposit-holder">예금주: 이종현</div>
         <div class="deposit-amount-highlight" style="margin-top:16px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <span>👨 남성 회원 </span>
-            <strong style="font-size:18px;">5,000원</strong>
+            <span>👨 남성 회원 (팀 등록 + 노출)</span>
+            <strong style="font-size:18px;">3,000원</strong>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid rgba(255,255,255,0.2);">
-            <span>👩 여성 회원 </span>
-            <strong style="font-size:18px;">3,000원</strong>
+            <span>👩 여성 회원 (과팅 신청 기능)</span>
+            <strong style="font-size:18px;">1,000원</strong>
           </div>
         </div>
       </div>
@@ -1321,7 +1321,7 @@
       <!-- 정식 운영 안내 배너 -->
       <div style="background:linear-gradient(90deg,#1A1A2E,#2D2D5E);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:16px;border-left:4px solid var(--pink);">
         <p style="font-size:11px;font-weight:700;color:var(--pink-light);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:4px;">📢 정식 운영 안내</p>
-        <p style="font-size:12px;color:rgba(255,255,255,0.85);line-height:1.6;">현재 <strong style="color:white;">얼리버드 이벤트 기간</strong>으로 이용료가 1,000원 입니다. 4월30일부터 <strong style="color:var(--pink-light);">정상가격으로</strong> 이용료가 부과될 예정입니다. 지금 바로 가입하고 혜택을 누려보세요!</p>
+        <p style="font-size:12px;color:rgba(255,255,255,0.85);line-height:1.6;">현재 <strong style="color:white;">얼리버드 이벤트 기간</strong>으로 남성 회원 이용료가 무료입니다. 정식 운영 시작 후에는 과팅 매칭 <strong style="color:var(--pink-light);">1건당 3,000원</strong>의 이용료가 부과될 예정입니다. 지금 바로 가입하고 혜택을 누려보세요!</p>
       </div>
 
       <div class="info-box" style="margin-bottom:20px;">
@@ -1338,9 +1338,9 @@
         <p class="form-hint">입금 시 사용할 이름과 동일해야 합니다</p>
       </div>
 
-      <button class="btn btn-primary" id="btn-deposit" onclick="submitDeposit()">입금 완료했습니다 ✓</button>
+      <button class="btn btn-primary" id="btn-deposit" id="btn-submit-deposit">입금 완료했습니다 ✓</button>
       <div style="text-align:center;margin-top:12px;">
-        <span style="font-size:13px;color:var(--pink);cursor:pointer;" onclick="showTerms('refund')">환불 정책 확인하기 →</span>
+        <span style="font-size:13px;color:var(--pink);cursor:pointer;" data-terms="refund">환불 정책 확인하기 →</span>
       </div>
     </div>
   </div>
@@ -1350,7 +1350,7 @@
     <div class="header">
       <div class="header-logo">🌸 춘천과팅</div>
       <div style="display:flex;gap:8px;align-items:center;">
-        <button id="btn-notif-bell" style="border:none;background:none;font-size:22px;cursor:pointer;position:relative;" onclick="showToast('알림이 없습니다')">
+        <button id="btn-notif-bell" style="border:none;background:none;font-size:22px;cursor:pointer;position:relative;" data-toast="알림이 없습니다">
           🔔
           <span class="tab-badge" id="badge-notif" style="top:2px;right:2px;display:none;">0</span>
         </button>
@@ -1362,7 +1362,7 @@
       <div id="guest-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#FFF0F5,#F3E8FF);border-bottom:1px solid var(--pink-light);">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
           <span style="font-size:12px;color:var(--gray-700);">👀 구경 중이에요 — 신청하려면 가입이 필요해요</span>
-          <button onclick="showScreen('screen-register')" style="border:none;background:var(--pink);color:white;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">가입하기</button>
+          <button data-goto="screen-register" style="border:none;background:var(--pink);color:white;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">가입하기</button>
         </div>
       </div>
 
@@ -1388,11 +1388,11 @@
 
       <!-- Filter -->
       <div class="filter-bar">
-        <button class="filter-chip active" onclick="filterTeams(this,'all')">전체</button>
-        <button class="filter-chip" onclick="filterTeams(this,'강원대')">강원대</button>
-        <button class="filter-chip" onclick="filterTeams(this,'한림대')">한림대</button>
-        <button class="filter-chip" onclick="filterTeams(this,'성심대')">성심대</button>
-        <button class="filter-chip" onclick="filterTeams(this,'비흡연')">🚭 비흡연</button>
+        <button class="filter-chip active" data-filter="all">전체</button>
+        <button class="filter-chip" data-filter="강원대">강원대</button>
+        <button class="filter-chip" data-filter="한림대">한림대</button>
+        <button class="filter-chip" data-filter="성심대">성심대</button>
+        <button class="filter-chip" data-filter="비흡연">🚭 비흡연</button>
       </div>
 
       <!-- Team List -->
@@ -1402,24 +1402,24 @@
     </div>
 
     <div class="tab-bar" id="tab-bar">
-      <button class="tab-item active" onclick="switchTab('home')">
+      <button class="tab-item active" data-tab="home">
         <span class="tab-icon">🏠</span>
         <span class="tab-label">홈</span>
       </button>
-      <button class="tab-item" onclick="switchTab('find')">
+      <button class="tab-item" data-tab="find">
         <span class="tab-icon">👥</span>
         <span class="tab-label">팀등록</span>
       </button>
-      <button class="tab-item" id="tab-requests-btn" onclick="switchTab('requests')">
+      <button class="tab-item" id="tab-requests-btn" data-tab="requests">
         <span class="tab-icon">💌</span>
         <span class="tab-label">신청내역</span>
         <span class="tab-badge" id="badge-requests" style="display:none;">0</span>
       </button>
-      <button class="tab-item" onclick="switchTab('messages')">
+      <button class="tab-item" data-tab="messages">
         <span class="tab-icon">💬</span>
         <span class="tab-label">후기</span>
       </button>
-      <button class="tab-item" onclick="switchTab('mypage')">
+      <button class="tab-item" data-tab="mypage">
         <span class="tab-icon">👤</span>
         <span class="tab-label">마이페이지</span>
       </button>
@@ -1429,9 +1429,9 @@
   <!-- ───── TEAM DETAIL ───── -->
   <div class="screen" id="screen-team-detail">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-home')">←</button>
+      <button class="btn-back" data-goto="screen-home">←</button>
       <span class="header-title">팀 프로필</span>
-      <span class="header-action" onclick="showReportNotice()">신고</span>
+      <span class="header-action" id="btn-show-report-notice">신고</span>
     </div>
     <div class="scroll-content" style="padding:0 0 24px;">
       <!-- Team Header -->
@@ -1462,17 +1462,8 @@
       </div>
 
       <div style="padding:0 16px 24px;display:flex;flex-direction:column;gap:10px;">
-        <button class="btn btn-primary" onclick="
-          if (!state.profile) { showAuthGateModal('apply'); return; }
-          const team = _cachedTeams.find(t => t.id === window._currentDetailTeamId);
-          if (!team) { showToast('팀 정보를 찾을 수 없습니다.'); return; }
-          const pg = state.profile.gender;
-          const tg = team.gender;
-          if (pg === 'male' && tg !== 'female') { showToast('❌ 남성 회원은 여성팀에만 신청할 수 있습니다.'); return; }
-          if (pg === 'female' && tg !== 'male') { showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return; }
-          openApplyScreen(window._currentDetailTeamId);
-        ">💌 과팅 신청하기</button>
-        <button class="btn btn-outline" onclick="state.profile ? showToast('💬 메시지를 보내기 전 신청을 먼저 해주세요') : showAuthGateModal('message')">💬 채팅 먼저 하기</button>
+        <button class="btn btn-primary" data-authgate="apply">💌 과팅 신청하기</button>
+        <button class="btn btn-outline" >💬 채팅 먼저 하기</button>
       </div>
     </div>
   </div>
@@ -1480,7 +1471,7 @@
   <!-- ───── APPLY (여성 신청) ───── -->
   <div class="screen" id="screen-apply">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-team-detail')">←</button>
+      <button class="btn-back" data-goto="screen-team-detail">←</button>
       <span class="header-title">과팅 신청</span>
       <div style="width:36px;"></div>
     </div>
@@ -1520,7 +1511,7 @@
           과팅 신청을 하려면 먼저 팀을 등록해야 합니다.
         </p>
         <button class="btn btn-primary btn-sm"
-          onclick="showScreen('screen-team-register')">👥 팀 등록하러 가기</button>
+          data-goto="screen-team-register">👥 팀 등록하러 가기</button>
       </div>
 
       <!-- 신청 메시지 -->
@@ -1532,7 +1523,7 @@
       </div>
 
       <button class="btn btn-primary" id="btn-submit-apply"
-        onclick="submitApply()" style="display:none;">💌 신청 완료</button>
+        id="btn-submit-apply-form" style="display:none;">💌 신청 완료</button>
       <p style="font-size:12px;color:var(--gray-400);text-align:center;margin-top:10px;">
         상대팀이 수락 시 연락처 정보가 공개됩니다
       </p>
@@ -1549,8 +1540,8 @@
     <div class="scroll-content">
       <!-- 탭 -->
       <div style="display:flex;border-bottom:1px solid var(--gray-200);background:white;">
-        <button id="tab-sent" onclick="switchRequestTab('sent')" style="flex:1;height:44px;border:none;background:none;font-size:14px;font-weight:700;color:var(--pink);border-bottom:2px solid var(--pink);font-family:inherit;cursor:pointer;">보낸 신청</button>
-        <button id="tab-received" onclick="switchRequestTab('received')" style="flex:1;height:44px;border:none;background:none;font-size:14px;font-weight:500;color:var(--gray-500);border-bottom:2px solid transparent;font-family:inherit;cursor:pointer;">받은 신청</button>
+        <button id="tab-sent" data-reqtab="sent" style="flex:1;height:44px;border:none;background:none;font-size:14px;font-weight:700;color:var(--pink);border-bottom:2px solid var(--pink);font-family:inherit;cursor:pointer;">보낸 신청</button>
+        <button id="tab-received" data-reqtab="received" style="flex:1;height:44px;border:none;background:none;font-size:14px;font-weight:500;color:var(--gray-500);border-bottom:2px solid transparent;font-family:inherit;cursor:pointer;">받은 신청</button>
       </div>
 
       <div id="requests-content" style="padding:16px;display:flex;flex-direction:column;gap:10px;">
@@ -1559,10 +1550,10 @@
     </div>
 
     <div class="tab-bar">
-      <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
-      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
-      <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
-      <button class="tab-item" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
+      <button class="tab-item" data-tab="home"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
+      <button class="tab-item" data-tab="find"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
+      <button class="tab-item" data-tab="messages"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
+      <button class="tab-item" data-tab="mypage"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
     </div>
   </div>
 
@@ -1572,7 +1563,7 @@
     <div class="header">
       <div class="header-logo">🌸 과팅 후기</div>
       <button class="btn btn-primary btn-sm" style="width:auto;padding:0 14px;height:36px;font-size:13px;"
-        onclick="document.getElementById('modal-review-write')?.classList.add('show')">✏️ 후기 쓰기</button>
+        id="btn-open-review-modal">✏️ 후기 쓰기</button>
     </div>
     <div class="scroll-content" style="padding:16px;">
       <div class="info-box" style="margin-bottom:16px;">
@@ -1584,18 +1575,18 @@
       </div>
     </div>
     <div class="tab-bar">
-      <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
-      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
-      <button class="tab-item" onclick="switchTab('requests')"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
-      <button class="tab-item active" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
-      <button class="tab-item" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
+      <button class="tab-item" data-tab="home"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
+      <button class="tab-item" data-tab="find"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
+      <button class="tab-item" data-tab="requests"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
+      <button class="tab-item active" data-tab="messages"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
+      <button class="tab-item" data-tab="mypage"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
     </div>
   </div>
 
   <!-- ───── MATCH SUCCESS ───── -->
   <div class="screen" id="screen-match-success">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-requests')">←</button>
+      <button class="btn-back" data-goto="screen-requests">←</button>
       <span class="header-title">🎉 매칭 완료!</span>
       <div style="width:36px;"></div>
     </div>
@@ -1607,11 +1598,11 @@
           <strong id="match-success-team-name" style="color:var(--pink);">상대팀</strong>과의<br>만남이 확정되었습니다 🌸
         </p>
 
-        <!-- 인스타그램 + 카카오 연결 -->
+        <!-- 전화번호 + 카카오 연결 -->
         <div class="card card-p" style="margin-bottom:20px;text-align:left;">
           <p style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:12px;">📞 상대팀 연락처</p>
           <div style="background:#F1F8E9;border:1px solid #A5D6A7;border-radius:var(--radius-sm);padding:14px;margin-bottom:10px;">
-            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">📸 인스타그램 ID</p>
+            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">📱 전화번호</p>
             <p id="match-contact-phone"
               style="font-size:20px;font-weight:700;color:#1B5E20;letter-spacing:0.05em;">
               —
@@ -1625,7 +1616,7 @@
             </p>
           </div>
           <button class="btn btn-primary" id="btn-save-contact"
-            onclick="saveMatchContact()" style="background:linear-gradient(135deg,#4CAF50,#388E3C);">
+            id="btn-save-match-contact" style="background:linear-gradient(135deg,#4CAF50,#388E3C);">
             💾 연락처 저장하기
           </button>
         </div>
@@ -1637,9 +1628,9 @@
 
         <div style="display:flex;gap:8px;">
           <button class="btn btn-outline" style="flex:1;"
-            onclick="showScreen('screen-requests')">← 신청 내역으로</button>
+            data-goto="screen-requests">← 신청 내역으로</button>
           <button class="btn btn-danger btn-sm" style="width:auto;padding:0 16px;"
-            onclick="showReportNotice()">🚨 신고</button>
+            id="btn-show-report-notice">🚨 신고</button>
         </div>
       </div>
     </div>
@@ -1648,7 +1639,7 @@
   <!-- ───── TEAM REGISTER ───── -->
   <div class="screen" id="screen-team-register">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-home')">←</button>
+      <button class="btn-back" data-goto="screen-home">←</button>
       <span class="header-title">팀 등록</span>
       <div style="width:36px;"></div>
     </div>
@@ -1678,7 +1669,7 @@
         <!-- JS 렌더 -->
       </div>
 
-      <button class="btn btn-primary" id="btn-team-register" onclick="registerTeam()">팀 등록하기 🎉</button>
+      <button class="btn btn-primary" id="btn-team-register" id="btn-register-team-form">팀 등록하기 🎉</button>
     </div>
   </div>
 
@@ -1720,37 +1711,37 @@
             placeholder="예: MC, 얼굴 담당, 분위기메이커" maxlength="20"
             style="flex:1;height:40px;font-size:13px;">
           <button class="btn btn-secondary btn-sm" style="width:60px;min-width:60px;"
-            onclick="saveCustomBadge()">저장</button>
+            id="btn-save-badge">저장</button>
         </div>
         <p style="font-size:11px;color:var(--gray-400);margin-top:6px;">팀 카드에서 MBTI 옆에 표시됩니다 (최대 20자)</p>
       </div>
 
       <div class="menu-list">
-        <div class="menu-item" onclick="showScreen('screen-team-register')">
+        <div class="menu-item" data-goto="screen-team-register">
           <span class="menu-icon">👥</span>
           <span class="menu-text">팀 등록/수정</span>
           <span class="menu-arrow">›</span>
         </div>
         <!-- 내 팀 삭제 -->
-        <div class="menu-item" onclick="confirmDeleteMyTeam()"
+        <div class="menu-item" id="btn-confirm-delete-team"
           style="background:#FFF5F5;">
           <span class="menu-icon">🗑️</span>
           <span class="menu-text" style="color:var(--error);">내 팀 등록 취소</span>
           <span class="menu-arrow" style="color:var(--error);">›</span>
         </div>
-        <div class="menu-item" onclick="showScreen('screen-deposit')">
+        <div class="menu-item" data-goto="screen-deposit">
           <span class="menu-icon">💳</span>
           <span class="menu-text">입금 안내</span>
           <span class="menu-value chip chip-green">완료</span>
           <span class="menu-arrow">›</span>
         </div>
-        <div class="menu-item" onclick="showScreen('screen-verification')">
+        <div class="menu-item" data-goto="screen-verification">
           <span class="menu-icon">🎓</span>
           <span class="menu-text">학생 인증</span>
           <span class="menu-value chip chip-green">승인</span>
           <span class="menu-arrow">›</span>
         </div>
-        <div class="menu-item" onclick="showReportNotice()">
+        <div class="menu-item" id="btn-show-report-notice">
           <span class="menu-icon">🚨</span>
           <span class="menu-text">신고하기</span>
           <span class="chip chip-orange" style="font-size:10px;padding:2px 8px;">준비중</span>
@@ -1759,22 +1750,22 @@
 
         <div style="height:8px;background:var(--gray-50);"></div>
 
-        <div class="menu-item" onclick="showTerms('terms')">
+        <div class="menu-item" data-terms="terms">
           <span class="menu-icon">📄</span>
           <span class="menu-text">서비스 이용약관</span>
           <span class="menu-arrow">›</span>
         </div>
-        <div class="menu-item" onclick="showTerms('privacy')">
+        <div class="menu-item" data-terms="privacy">
           <span class="menu-icon">🔐</span>
           <span class="menu-text">개인정보 처리방침</span>
           <span class="menu-arrow">›</span>
         </div>
-        <div class="menu-item" onclick="showTerms('refund')">
+        <div class="menu-item" data-terms="refund">
           <span class="menu-icon">💰</span>
           <span class="menu-text">환불 정책</span>
           <span class="menu-arrow">›</span>
         </div>
-        <div class="menu-item" onclick="showTerms('community')">
+        <div class="menu-item" data-terms="community">
           <span class="menu-icon">📋</span>
           <span class="menu-text">커뮤니티 운영정책</span>
           <span class="menu-arrow">›</span>
@@ -1782,12 +1773,12 @@
 
         <div style="height:8px;background:var(--gray-50);"></div>
 
-        <div class="menu-item" onclick="showWithdraw()">
+        <div class="menu-item" id="btn-show-withdraw">
           <span class="menu-icon">👋</span>
           <span class="menu-text" style="color:var(--error);">회원 탈퇴</span>
           <span class="menu-arrow">›</span>
         </div>
-        <div class="menu-item" onclick="doLogout()">
+        <div class="menu-item" id="btn-logout">
           <span class="menu-icon">🚪</span>
           <span class="menu-text" style="color:var(--gray-600);">로그아웃</span>
           <span class="menu-arrow">›</span>
@@ -1795,7 +1786,7 @@
 
         <!-- 2️⃣ 관리자 모드 버튼 (role=admin 일 때만 표시, JS에서 제어) -->
         <div id="btn-admin-mode" class="menu-item"
-          onclick="showScreen('screen-admin');renderAdminDashboard();"
+          id="btn-goto-admin"
           style="display:none;background:linear-gradient(90deg,#1A1A2E,#2D2D5E);color:white;border-radius:var(--radius-sm);margin:12px 16px;">
           <span class="menu-icon">🛠</span>
           <span class="menu-text" style="color:white;font-weight:700;">관리자 모드</span>
@@ -1806,18 +1797,18 @@
     </div>
 
     <div class="tab-bar">
-      <button class="tab-item" onclick="switchTab('home')"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
-      <button class="tab-item" onclick="switchTab('find')"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
-      <button class="tab-item" onclick="switchTab('requests')"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
-      <button class="tab-item" onclick="switchTab('messages')"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
-      <button class="tab-item active" onclick="switchTab('mypage')"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
+      <button class="tab-item" data-tab="home"><span class="tab-icon">🏠</span><span class="tab-label">홈</span></button>
+      <button class="tab-item" data-tab="find"><span class="tab-icon">👥</span><span class="tab-label">팀등록</span></button>
+      <button class="tab-item" data-tab="requests"><span class="tab-icon">💌</span><span class="tab-label">신청내역</span></button>
+      <button class="tab-item" data-tab="messages"><span class="tab-icon">💬</span><span class="tab-label">후기</span></button>
+      <button class="tab-item active" data-tab="mypage"><span class="tab-icon">👤</span><span class="tab-label">마이페이지</span></button>
     </div>
   </div>
 
   <!-- ───── TERMS (약관) ───── -->
   <div class="screen" id="screen-terms">
     <div class="header">
-      <button class="btn-back" onclick="history.back()">←</button>
+      <button class="btn-back" id="btn-history-back">←</button>
       <span class="header-title" id="terms-title">이용약관</span>
       <div style="width:36px;"></div>
     </div>
@@ -1842,8 +1833,8 @@
         <div class="form-group">
           <input class="form-input" type="password" id="admin-pw" placeholder="비밀번호" style="background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);color:white;">
         </div>
-        <button class="btn" id="btn-admin-login" style="background:var(--pink);color:white;margin-top:8px;" onclick="doAdminLogin()">관리자 로그인</button>
-        <button class="btn btn-ghost" style="color:rgba(255,255,255,0.5);margin-top:8px;" onclick="showScreen('screen-landing')">← 돌아가기</button>
+        <button class="btn" id="btn-admin-login" style="background:var(--pink);color:white;margin-top:8px;" id="btn-admin-login-submit">관리자 로그인</button>
+        <button class="btn btn-ghost" style="color:rgba(255,255,255,0.5);margin-top:8px;" data-goto="screen-landing">← 돌아가기</button>
       </div>
     </div>
   </div>
@@ -1856,19 +1847,19 @@
           <h2>🛠 관리자 대시보드</h2>
           <p>춘천 과팅 운영 현황</p>
         </div>
-        <button style="border:none;background:rgba(255,255,255,0.1);color:white;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:inherit;" onclick="doLogout()">로그아웃</button>
+        <button style="border:none;background:rgba(255,255,255,0.1);color:white;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:inherit;" id="btn-logout">로그아웃</button>
       </div>
     </div>
 
     <!-- Admin Tabs -->
     <div style="display:flex;background:white;border-bottom:1px solid var(--gray-200);overflow-x:auto;-webkit-overflow-scrolling:touch;" id="admin-tabs">
-      <button class="filter-chip active" style="border-radius:0;border:none;border-bottom:2px solid var(--pink);padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('dashboard',this)">📊 대시보드</button>
-      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('users',this)">👤 회원관리</button>
-      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('verif',this)">🎓 인증관리</button>
-      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('deposit',this)">💳 입금관리</button>
-      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('teams',this)">👥 팀관리</button>
-      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('reports',this)">🚨 신고</button>
-      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('reviews',this)">✏️ 후기관리</button>
+      <button class="filter-chip active" style="border-radius:0;border:none;border-bottom:2px solid var(--pink);padding:12px 14px;white-space:nowrap;font-size:13px;" data-admintab="dashboard">📊 대시보드</button>
+      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" data-admintab="users">👤 회원관리</button>
+      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" data-admintab="verif">🎓 인증관리</button>
+      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" data-admintab="deposit">💳 입금관리</button>
+      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" data-admintab="teams">👥 팀관리</button>
+      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" data-admintab="reports">🚨 신고</button>
+      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" data-admintab="reviews">✏️ 후기관리</button>
     </div>
 
     <div class="scroll-content" id="admin-content">
@@ -1885,9 +1876,9 @@
         <h3 id="gate-title" style="font-size:20px;font-weight:700;color:var(--gray-900);margin-bottom:8px;">회원 전용 기능</h3>
         <p id="gate-desc" style="font-size:14px;color:var(--gray-500);line-height:1.6;margin-bottom:24px;">가입하고 모든 기능을 이용해보세요!</p>
         <div style="display:flex;flex-direction:column;gap:10px;">
-          <button class="btn btn-primary" onclick="closeModal('modal-auth-gate');showScreen('screen-register')">💌 무료 회원가입</button>
-          <button class="btn btn-outline" onclick="closeModal('modal-auth-gate');showScreen('screen-login')">로그인</button>
-          <button class="btn btn-ghost" style="color:var(--gray-400);" onclick="closeModal('modal-auth-gate')">계속 구경할게요</button>
+          <button class="btn btn-primary" id="btn-authgate-register">💌 무료 회원가입</button>
+          <button class="btn btn-outline" id="btn-authgate-login">로그인</button>
+          <button class="btn btn-ghost" style="color:var(--gray-400);" data-closemodal="modal-auth-gate">계속 구경할게요</button>
         </div>
       </div>
     </div>
@@ -1899,7 +1890,7 @@
       <div class="modal-handle"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
         <span style="font-size:18px;font-weight:700;">👤 회원 상세 프로필</span>
-        <button onclick="closeModal('modal-admin-user')" style="border:none;background:var(--gray-100);border-radius:50%;width:32px;height:32px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>
+        <button data-closemodal="modal-admin-user" style="border:none;background:var(--gray-100);border-radius:50%;width:32px;height:32px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>
       </div>
       <div id="admin-user-modal-body">
         <!-- JS 렌더 -->
@@ -1923,7 +1914,7 @@
         <div style="background:var(--gray-50);border:1px solid var(--gray-200);
           border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;text-align:left;">
           <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px;">신고 접수 이메일</div>
-          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="0e64616660513f3c3f394e606f786b7c206d6163">[email&#160;protected]</a></div>
+          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="a9c3c6c1c7f6989b989ee9c7c8dfccdb87cac6c4">[email&#160;protected]</a></div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:6px;line-height:1.6;">
             • 신고 유형 (허위 프로필 / 욕설 / 성희롱 / 기타)<br>
             • 신고 내용을 상세히 작성해 보내주세요<br>
@@ -1931,9 +1922,9 @@
           </div>
         </div>
         <button class="btn btn-primary" style="margin-bottom:8px;"
-          onclick="copyReportEmail()">📋 이메일 주소 복사</button>
+          id="btn-copy-report-email">📋 이메일 주소 복사</button>
         <button class="btn btn-outline"
-          onclick="closeModal('modal-report')">닫기</button>
+          data-closemodal="modal-report">닫기</button>
       </div>
     </div>
   </div>
@@ -1945,7 +1936,7 @@
       <div class="modal-title" id="modal-terms-title">이용약관</div>
       <div id="modal-terms-body" style="font-size:13px;color:var(--gray-700);line-height:1.8;"></div>
       <div style="margin-top:20px;">
-        <button class="btn btn-primary" onclick="closeModal('modal-terms')">확인</button>
+        <button class="btn btn-primary" data-closemodal="modal-terms">확인</button>
       </div>
     </div>
   </div>
@@ -1961,11 +1952,11 @@
       </p>
       <div class="info-box info-box-warn" style="margin-bottom:20px;">
         <span class="info-box-icon">⚠️</span>
-        <span>이용료는 서비스 이용 후에는 환불되지 않습니다. (<span style="color:var(--pink);cursor:pointer;" onclick="showTerms('refund')">환불 정책 확인</span>)</span>
+        <span>이용료는 서비스 이용 후에는 환불되지 않습니다. (<span style="color:var(--pink);cursor:pointer;" data-terms="refund">환불 정책 확인</span>)</span>
       </div>
       <div style="display:flex;gap:10px;">
-        <button class="btn btn-outline" style="flex:1;" onclick="closeModal('modal-withdraw')">취소</button>
-        <button class="btn btn-danger" style="flex:1;" onclick="doWithdraw()">탈퇴하기</button>
+        <button class="btn btn-outline" style="flex:1;" data-closemodal="modal-withdraw">취소</button>
+        <button class="btn btn-danger" style="flex:1;" id="btn-do-withdraw">탈퇴하기</button>
       </div>
     </div>
   </div>
@@ -1973,7 +1964,7 @@
   <!-- ───── PREVIEW SCREEN ───── -->
   <div class="screen" id="screen-preview">
     <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-landing')">←</button>
+      <button class="btn-back" data-goto="screen-landing">←</button>
       <span class="header-logo">🌸 춘천과팅</span>
       <div style="width:36px;"></div>
     </div>
@@ -1993,8 +1984,8 @@
             강원대·한림대·성심대 재학생이라면<br>지금 바로 가입하고 매칭을 시작해보세요!
           </p>
           <div style="display:flex;gap:8px;">
-            <button class="btn btn-primary btn-sm" style="flex:1;" onclick="showScreen('screen-register')">💌 가입하기</button>
-            <button class="btn btn-outline btn-sm" style="flex:1;" onclick="showScreen('screen-login')">로그인</button>
+            <button class="btn btn-primary btn-sm" style="flex:1;" data-goto="screen-register">💌 가입하기</button>
+            <button class="btn btn-outline btn-sm" style="flex:1;" data-goto="screen-login">로그인</button>
           </div>
         </div>
       </div>
@@ -2014,7 +2005,7 @@
             <div style="width:28px;height:28px;background:var(--pink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;font-weight:700;flex-shrink:0;">2</div>
             <div>
               <p style="font-size:13px;font-weight:700;">이용료 입금</p>
-              <p style="font-size:11px;color:var(--gray-500);">남성 5,000원 · 여성 3,000원 (신한 110-498-811897)</p>
+              <p style="font-size:11px;color:var(--gray-500);">남성 3,000원 · 여성 1,000원 (신한 110-498-811897)</p>
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:12px;background:white;border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--gray-100);">
@@ -2048,7 +2039,7 @@
         <div style="background:var(--navy);border-radius:var(--radius-lg);padding:24px;text-align:center;">
           <p style="font-size:18px;font-weight:700;color:white;margin-bottom:8px;">지금 바로 시작해요 🌸</p>
           <p style="font-size:13px;color:rgba(255,255,255,0.65);margin-bottom:20px;">춘천 대학생이라면 누구나 가입 가능</p>
-          <button class="btn btn-primary" onclick="showScreen('screen-register')">💌 무료 회원가입</button>
+          <button class="btn btn-primary" data-goto="screen-register">💌 무료 회원가입</button>
         </div>
       </div>
     </div>
@@ -2073,8 +2064,8 @@
         <span>확인 후에도 최종 승인 여부는 관리자 검수 결과에 따라 결정됩니다.</span>
       </div>
       <div style="display:flex;gap:10px;">
-        <button class="btn btn-outline" style="flex:1;" onclick="closeModal('team-unverified-confirm')">취소</button>
-        <button class="btn btn-primary" style="flex:1;" onclick="confirmUnverifiedTeam()">확인했어요</button>
+        <button class="btn btn-outline" style="flex:1;" data-closemodal="team-unverified-confirm">취소</button>
+        <button class="btn btn-primary" style="flex:1;" id="btn-confirm-unverified">확인했어요</button>
       </div>
     </div>
   </div>
@@ -2116,9 +2107,9 @@
       </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-outline" style="flex:1;"
-          onclick="closeModal('modal-review-write')">취소</button>
+          id="btn-close-review-modal">취소</button>
         <button class="btn btn-primary" id="btn-submit-review" style="flex:1;"
-          onclick="submitReview()">후기 제출</button>
+          id="btn-submit-review-form">후기 제출</button>
       </div>
     </div>
   </div>
