@@ -198,7 +198,7 @@ async function initApp() {
 }
 
 async function loadProfile(authUserId) {
-  // 1차 시도
+  // maybeSingle: 결과 없어도 에러 안 남 (single은 RLS 오류 시 throw)
   let { data, error } = await _sb
     .from('users')
     .select('*')
@@ -206,16 +206,14 @@ async function loadProfile(authUserId) {
     .is('deleted_at', null)
     .maybeSingle();
 
-  // 실패 시 800ms 대기 후 재시도 (Auth 세션 동기화 지연 대응)
-  if (!data) {
-    await new Promise(r => setTimeout(r, 800));
-    const retry = await _sb
-      .from('users')
-      .select('*')
-      .eq('auth_id', authUserId)
-      .is('deleted_at', null)
-      .maybeSingle();
-    data = retry.data;
+  // Auth 세션 동기화 지연 대응 — 최대 2회 재시도
+  if (!data && !error) {
+    for (let i = 0; i < 2; i++) {
+      await new Promise(r => setTimeout(r, 600));
+      const r2 = await _sb.from('users').select('*')
+        .eq('auth_id', authUserId).is('deleted_at', null).maybeSingle();
+      if (r2.data) { data = r2.data; break; }
+    }
   }
 
   if (!data) { state.profile = null; return null; }
@@ -565,14 +563,14 @@ window.doFindAccount = doFindAccount;
 function doForgotPassword() { doFindAccount('pw'); }
 window.doForgotPassword = doForgotPassword;
 async function doAdminLogin() {
-  const usernameRaw = document.getElementById('admin-id')?.value.trim().toLowerCase();
+  const usernameRaw = document.getElementById('admin-id')?.value.trim();
   const password    = document.getElementById('admin-pw')?.value;
 
   if (!usernameRaw || !password) { showToast('아이디와 비밀번호를 입력하세요'); return; }
 
   setBtnLoading('btn-admin-login', true, '관리자 로그인');
   try {
-    const email = usernameRaw.includes('@') ? usernameRaw : `${usernameRaw}@chuncheon-dating.local`;
+    const email = `${usernameRaw}@chuncheon-dating.local`;
 
     const { data, error } = await _sb.auth.signInWithPassword({ email, password });
     if (error) throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.');
@@ -838,7 +836,7 @@ async function goToVerification() {
   const studentNum = document.getElementById('reg-student-num')?.value.trim();
   const birthYear  = parseInt(document.getElementById('birth-year')?.value || '0');
   const nickname   = document.getElementById('reg-nickname')?.value.trim();
-  const phoneNum   = document.getElementById('reg-phone')?.value.trim() || null;  // 카카오ID
+  const phoneNum   = document.getElementById('reg-phone')?.value.trim() || null;
   const mbti       = document.getElementById('reg-mbti')?.value || null;
   const smoking    = document.querySelector('input[name="smoking"]:checked')?.value === 'yes';
   const bio        = document.getElementById('reg-bio')?.value.trim() || null;
@@ -859,8 +857,8 @@ async function goToVerification() {
     showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
-  if (!phoneNum || phoneNum.length < 2) {
-    showToast('카카오톡 ID를 입력해주세요 (2자 이상)'); return;
+  if (!phoneNum || phoneNum.trim().length < 2) {
+    showToast('카카오톡 ID를 입력해주세요 (영문·숫자 2자 이상)'); return;
   }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
@@ -1029,6 +1027,8 @@ async function submitVerification() {
     } else {
       // ★ phone_number는 users 테이블에 컬럼이 없을 수 있으므로
       //   payload를 동적으로 구성해 컬럼이 있을 때만 포함
+      // ★ INSERT는 최소 컬럼만 — phone_number/custom_badge는 후속 UPDATE로
+      //   (42P17 재귀 방지: RLS 정책이 users를 다시 참조하는 것 차단)
       const insertPayload = {
         auth_id:         signUpUid,
         username:        d.username,
@@ -1045,26 +1045,30 @@ async function submitVerification() {
         marketing_agree: d.marketing_agree,
         profile_active:  false
       };
-      // phone_number 컬럼이 DB에 추가된 경우에만 포함
-      if (d.phone_number) insertPayload.phone_number = d.phone_number;
-      // custom_badge 컬럼이 DB에 있는 경우에만 포함 (없으면 무시)
-      if (d.custom_badge) insertPayload.custom_badge = d.custom_badge;
 
       let newP, profileErr;
-      ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+      ({ data: newP, error: profileErr } = await _sb
+        .from('users').insert(insertPayload).select().maybeSingle());
 
-      // ★ 컬럼 없음(PGRST204) 또는 schema cache 오류 → 선택 컬럼 제거 후 재시도
-      const isMissingCol = (e) =>
-        e?.code === 'PGRST204' ||
-        e?.message?.includes('schema cache') ||
-        e?.message?.includes('Could not find');
+      // INSERT 실패 시 재시도 (schema cache 오류 등)
+      if (profileErr) {
+        console.warn('[SV] INSERT 재시도:', profileErr.message);
+        await new Promise(r => setTimeout(r, 500));
+        ({ data: newP, error: profileErr } = await _sb
+          .from('users').insert(insertPayload).select().maybeSingle());
+      }
 
-      if (profileErr && isMissingCol(profileErr)) {
-        console.warn('[SV] 선택 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
-        // custom_badge, phone_number 제거 후 재시도
-        delete insertPayload.custom_badge;
-        delete insertPayload.phone_number;
-        ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+      // INSERT 성공 후 선택 컬럼 UPDATE (42P17 우회)
+      if (!profileErr && newP) {
+        const extraUpdate = {};
+        if (d.phone_number) extraUpdate.phone_number = d.phone_number;
+        if (d.custom_badge) extraUpdate.custom_badge  = d.custom_badge;
+        if (Object.keys(extraUpdate).length > 0) {
+          const { error: updErr } = await _sb.from('users')
+            .update(extraUpdate).eq('id', newP.id);
+          if (updErr) console.warn('[SV] 선택컬럼 UPDATE 실패(무시):', updErr.message);
+          else Object.assign(newP, extraUpdate);
+        }
       }
 
       if (profileErr) {
@@ -1130,21 +1134,37 @@ async function submitVerification() {
     const safeName = `${Date.now()}_${Math.random().toString(36).slice(2,7)}.${fileExt}`;
     const filePath = `verifications/${signUpUid}/${safeName}`;
 
-    let uploadedPath = filePath;
     const { error: uploadErr } = await _sb.storage
       .from('student-verifications')
       .upload(filePath, file, { contentType: file.type, upsert: true });
 
     if (uploadErr) {
-      // ★ 업로드 실패(42P17 등)해도 가입은 계속 진행
-      // Storage RLS 정책이 없어도 나머지 단계 완료 가능
-      console.warn('[SV] Storage 업로드 실패 (무시하고 계속):', uploadErr.message);
-      uploadedPath = null;  // 이미지 없이 검토 요청
+      const code = uploadErr.statusCode ?? '';
+      const msg  = uploadErr.message ?? '';
+      let guide  = '';
+
+      if (msg.includes('Bucket not found') || msg.includes('bucket')) {
+        guide = '스토리지 버킷(student-verifications)이 없습니다. ' +
+                'Supabase → Storage에서 "student-verifications" 버킷을 생성하세요.';
+      } else if (code === '403' || msg.includes('security') || msg.includes('policy') || msg.includes('RLS')) {
+        guide = 'Storage 권한 오류입니다. Supabase → Storage → Policies에서\n' +
+                '"student-verifications" 버킷에 아래 INSERT 정책을 추가하세요:\n' +
+                'USING: bucket_id = \'student-verifications\'\n' +
+                'CHECK: name LIKE \'verifications/\' || auth.uid() || \'/%\'';
+      } else if (code === '409' || msg.includes('Duplicate') || msg.includes('already exists')) {
+        // upsert:true인데도 409면 RLS가 UPDATE도 막는 것 → 정책 안내
+        guide = '파일 중복 오류입니다. 잠시 후 다시 시도해주세요.';
+      } else if (msg.includes('size') || msg.includes('limit') || msg.includes('too large')) {
+        guide = `파일 크기 제한 초과 (${fileSizeMB}MB). 10MB 이하 파일을 사용해주세요.`;
+      } else {
+        guide = `이미지 업로드 실패 [${code}]: ${msg}`;
+      }
+      throw new Error(guide);
     }
 
     // ── STEP 5: student_verifications 저장 (이미 있으면 무시)
     const { error: verifErr } = await _sb.from('student_verifications').insert({
-      user_id: profile.id, image_path: uploadedPath, status: 'pending'
+      user_id: profile.id, image_path: filePath, status: 'pending'
     });
     if (verifErr && verifErr.code !== '23505') {
       throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
@@ -1164,8 +1184,8 @@ async function submitVerification() {
     state.profile = profile;
     state.regData = null;
     setText('home-username', profile.nickname + '님');
-    showToast('🎉 가입 완료! 학생증이 검토 중입니다. 승인 후 서비스가 활성화됩니다.');
-    showScreen('screen-home');
+    showToast('🎉 가입 완료! 학생증 검토 후 활성화됩니다');
+    showScreen('screen-deposit');
 
   } catch (err) {
     console.error('[submitVerification]', err);
@@ -1585,9 +1605,12 @@ async function registerTeam() {
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
   // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
-  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;  // 카카오ID
-  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;  // 인스타ID
-  if (!phoneNum) { showToast('카카오톡 ID는 필수입니다'); return; }
+  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
+  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
+  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
+  if (!phoneNum || phoneNum.trim().length < 2) {
+    showToast('카카오톡 ID를 입력해주세요 (2자 이상)'); return;
+  }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
