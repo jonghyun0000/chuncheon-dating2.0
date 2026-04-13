@@ -954,7 +954,7 @@
         </div>
         <div class="feature-row">
           <span class="feature-icon">💬</span>
-          <span class="feature-text">매칭 성사 시 인스타 + 카카오 연락처 공개</span>
+          <span class="feature-text">매칭 전 익명 채팅 — 안전하게</span>
         </div>
       </div>
 
@@ -1472,7 +1472,7 @@
           if (pg === 'female' && tg !== 'male') { showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return; }
           openApplyScreen(window._currentDetailTeamId);
         ">💌 과팅 신청하기</button>
-
+        <button class="btn btn-outline" onclick="state.profile ? showToast('💬 메시지를 보내기 전 신청을 먼저 해주세요') : showAuthGateModal('message')">💬 채팅 먼저 하기</button>
       </div>
     </div>
   </div>
@@ -1611,14 +1611,14 @@
         <div class="card card-p" style="margin-bottom:20px;text-align:left;">
           <p style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:12px;">📞 상대팀 연락처</p>
           <div style="background:#F1F8E9;border:1px solid #A5D6A7;border-radius:var(--radius-sm);padding:14px;margin-bottom:10px;">
-            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">📸 인스타그램 ID</p>
+            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">📱 전화번호</p>
             <p id="match-contact-phone"
               style="font-size:20px;font-weight:700;color:#1B5E20;letter-spacing:0.05em;">
               —
             </p>
           </div>
           <div style="background:#FFF8E1;border:1px solid #FFE082;border-radius:var(--radius-sm);padding:14px;margin-bottom:12px;">
-            <p style="font-size:12px;color:#F57F17;margin-bottom:6px;font-weight:600;">💬 카카오톡 ID</p>
+            <p style="font-size:12px;color:#F57F17;margin-bottom:6px;font-weight:600;">💛 카카오톡 ID</p>
             <p id="match-contact-kakao"
               style="font-size:18px;font-weight:700;color:#E65100;letter-spacing:0.03em;">
               —
@@ -1923,7 +1923,7 @@
         <div style="background:var(--gray-50);border:1px solid var(--gray-200);
           border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;text-align:left;">
           <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px;">신고 접수 이메일</div>
-          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="0d67626563523c3f3c3a4d636c7b687f236e6260">[email&#160;protected]</a></div>
+          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="bcd6d3d4d2e38d8e8d8bfcd2ddcad9ce92dfd3d1">[email&#160;protected]</a></div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:6px;line-height:1.6;">
             • 신고 유형 (허위 프로필 / 욕설 / 성희롱 / 기타)<br>
             • 신고 내용을 상세히 작성해 보내주세요<br>
