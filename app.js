@@ -151,7 +151,7 @@ function showAuthGateModal(action) {
     apply:   { emoji:'💌', title:'과팅 신청은 회원만',   desc:'가입하고 마음에 드는 팀에게 신청해보세요!' },
     team:    { emoji:'👥', title:'팀 등록은 회원만',     desc:'가입 후 인증을 완료하면 팀을 등록할 수 있어요.' },
     request: { emoji:'📬', title:'신청 내역은 회원만',   desc:'가입하면 보낸·받은 신청을 확인할 수 있어요.' },
-    message: { emoji:'💬', title:'채팅은 회원만',       desc:'가입하고 매칭된 팀과 안전하게 대화해보세요!' },
+    message: { emoji:'💬', title:'후기는 회원만',        desc:'가입하고 과팅 후기를 작성해보세요!' },
     mypage:  { emoji:'👤', title:'마이페이지는 회원만',  desc:'가입하면 내 정보와 매칭 현황을 확인할 수 있어요.' },
     default: { emoji:'🌸', title:'회원 전용 기능',      desc:'가입하고 모든 기능을 이용해보세요!' }
   };
@@ -1543,7 +1543,7 @@ async function openTeamDetail(teamId) {
 window.openTeamDetail = openTeamDetail;
 
 // ============================================================
-// 22. 팀 등록 — 인스타그램ID 필수, 카카오ID 선택, 인증완료 팀 상단 노출
+// 22. 팀 등록 — 인증 선택사항, 전화번호만, 인증완료 팀 상단 노출
 // ============================================================
 async function registerTeam() {
   const profile = state.profile;
@@ -1587,10 +1587,11 @@ async function registerTeam() {
   }
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
-  // ── 연락처 수집 (인스타그램 ID 필수, 카카오 ID 선택)
+  // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
   const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
   const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
   if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
+
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
@@ -1919,10 +1920,13 @@ async function submitApply() {
     const insertData = { status: 'pending', created_at: new Date().toISOString() };
     if (message) insertData.message = message;
 
-    // ★ 규칙: female_team_id=신청자, male_team_id=피신청자 (성별 무관)
-    // 보낸신청: female_team_id=내팀 / 받은신청: male_team_id=내팀
-    insertData.female_team_id = myTeam.id;
-    insertData.male_team_id   = targetTeamId;
+    if (profile.gender === 'male') {
+      insertData.male_team_id   = myTeam.id;
+      insertData.female_team_id = targetTeamId;
+    } else {
+      insertData.female_team_id = myTeam.id;
+      insertData.male_team_id   = targetTeamId;
+    }
 
     const { error } = await _sb.from('match_requests').insert(insertData);
 
@@ -1994,19 +1998,45 @@ async function loadAndRenderRequests(tab) {
     const profile = state.profile;
     const gender  = profile?.gender;
 
-    // ★ 규칙: female_team_id=신청자, male_team_id=피신청자 (성별 무관)
     if (tab === 'sent') {
-      // 보낸신청 = 내가 신청자 = female_team_id가 내 팀
-      ({ data, error } = await _sb.from('match_requests')
-        .select('*, teams!match_requests_male_team_id_fkey(title,university)')
-        .eq('female_team_id', myTeam.id)
-        .order('created_at', { ascending: false }));
+      // 내가 보낸 신청 = 내 팀이 신청자 측
+      // 여성팀이 남성팀에게 신청 → female_team_id = 내 팀
+      // 남성팀이 여성팀에게 신청 → male_team_id = 내 팀
+      if (gender === 'female') {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
+          .eq('female_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
+      } else {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
+      }
     } else {
-      // 받은신청 = 상대가 신청자 = male_team_id가 내 팀
-      ({ data, error } = await _sb.from('match_requests')
-        .select('*, teams!match_requests_female_team_id_fkey(title,university)')
-        .eq('male_team_id', myTeam.id)
-        .order('created_at', { ascending: false }));
+      // 받은 신청 = 상대팀이 내 팀에게 신청한 것 = 반대 컬럼이 내 팀
+      // 내가 남성팀 → 여성팀이 나에게 신청 → female_team_id는 상대, male_team_id = 내 팀
+      //   BUT: 이 경우 내가 보낸 것도 male_team_id=내팀이므로 구분 불가
+      //   → 실제 서비스 로직: 여성이 남성에게 신청하는 구조
+      //   → 남성 received = female_team_id = 상대가 신청자, male_team_id = 내팀
+      //   → 여성 received = 없음 (여성은 신청만 함)
+      if (gender === 'male') {
+        // 남성팀이 받은 신청 = 여성팀이 신청한 것 → male_team_id = 내팀
+        // sent랑 같은 조건이지만 received는 status=pending인 것만 (아직 처리 안 된 것)
+        // 단, sent에서 이미 보여주므로 received는 "상대방이 보낸 신청"
+        // → 현재 구조상 남성 received와 sent가 동일 → received 탭을 숨기거나 
+        //   "받은 신청" = 여성팀(상대)이 신청한 건 = male_team_id=내팀 + status=pending
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false }));
+      } else {
+        // 여성팀이 받은 신청 = 없음 (여성이 신청하는 구조)
+        // 빈 배열 반환
+        data = [];
+        error = null;
+      }
     }
 
     if (error) throw error;
@@ -2091,7 +2121,7 @@ async function showMatchSuccess(requestId, preloadedData) {
     if (phoneEl) phoneEl.textContent = preloadedData.phone || '미등록';
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = preloadedData.kakao || '미등록';
-    window._matchContactPhone = preloadedData.phone || '';
+    window._matchContactInsta = preloadedData.phone || '';  // 인스타ID
     window._matchContactKakao = preloadedData.kakao || '';
     window._matchContactName  = preloadedData.teamName || '상대팀';
     return;
@@ -2169,7 +2199,7 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
 
 // 연락처 저장 (vCard 다운로드)
 function saveMatchContact() {
-  const phone = (window._matchContactPhone || '').trim();
+  const phone = (window._matchContactInsta || window._matchContactPhone || '').trim();
   const kakao = (window._matchContactKakao || '').trim();
   const name  = (window._matchContactName  || '상대팀').trim();
   if (!phone && !kakao) { showToast('저장할 연락처가 없습니다.'); return; }
@@ -2198,54 +2228,54 @@ window.saveMatchContact = saveMatchContact;
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
-    // STEP1: 양쪽 팀 ID 파악 (maybeSingle — single은 실패 시 throw)
+    // match_request에서 상대팀 ID 먼저 파악 (업데이트 전에 읽기)
     const { data: reqBefore } = await _sb
       .from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId)
-      .maybeSingle();
+      .single();
 
-    if (!reqBefore?.male_team_id || !reqBefore?.female_team_id) {
-      showToast('❌ 신청 정보를 찾을 수 없습니다.'); return;
-    }
-
-    const maleTeamId   = reqBefore.male_team_id;
-    const femaleTeamId = reqBefore.female_team_id;
-
-    // STEP2: 연락처 먼저 조회 (status 변경 전 — 변경 후엔 RLS에 막힘)
-    const { data: myTeam } = await _sb.from('teams').select('id')
-      .eq('leader_id', state.profile?.id)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle();
-
-    const opponentTeamId = myTeam?.id === maleTeamId ? femaleTeamId : maleTeamId;
-
-    let preloaded = null;
-    if (opponentTeamId) {
-      const { data: oppTeam } = await _sb.from('teams')
-        .select('title, contact_phone, contact_kakao, leader_id')
-        .eq('id', opponentTeamId).maybeSingle();
-      if (oppTeam) {
-        let phone = oppTeam.contact_phone || '';
-        if (!phone && oppTeam.leader_id) {
-          const { data: leader } = await _sb.from('users')
-            .select('phone_number').eq('id', oppTeam.leader_id).maybeSingle();
-          if (leader?.phone_number) phone = leader.phone_number;
-        }
-        preloaded = { teamName: oppTeam.title, phone, kakao: oppTeam.contact_kakao };
-      }
-    }
-
-    // STEP3: match_request → matched
+    // match_request 상태 → matched
     const { error: reqErr } = await _sb.from('match_requests').update({
       status: 'matched', responded_at: new Date().toISOString()
     }).eq('id', requestId);
     if (reqErr) throw reqErr;
 
-    // STEP4: ★ 양쪽 팀 각각 개별 UPDATE (in()은 RLS에서 일부만 적용될 수 있음)
-    await _sb.from('teams').update({ status: 'matched', is_visible: false }).eq('id', maleTeamId);
-    await _sb.from('teams').update({ status: 'matched', is_visible: false }).eq('id', femaleTeamId);
+    // 내 팀 파악
+    const { data: myTeam } = await _sb
+      .from('teams').select('id').eq('leader_id', state.profile?.id).single();
+
+    // 상대팀 ID 결정
+    let opponentTeamId = null;
+    if (reqBefore && myTeam) {
+      opponentTeamId = myTeam.id === reqBefore.male_team_id
+        ? reqBefore.female_team_id
+        : reqBefore.male_team_id;
+    }
+
+    // 상대팀 연락처 미리 조회 (contact_kakao 포함)
+    let preloaded = null;
+    if (opponentTeamId) {
+      const { data: oppTeam } = await _sb
+        .from('teams')
+        .select('title, contact_phone, contact_kakao')
+        .eq('id', opponentTeamId)
+        .single();
+      if (oppTeam) {
+        preloaded = { teamName: oppTeam.title, phone: oppTeam.contact_phone, kakao: oppTeam.contact_kakao };
+      }
+    }
+
+    // 양쪽 팀 status → matched, is_visible → false
+    const teamIds = [reqBefore?.male_team_id, reqBefore?.female_team_id].filter(Boolean);
+    if (teamIds.length > 0) {
+      await _sb.from('teams')
+        .update({ status: 'matched', is_visible: false })
+        .in('id', teamIds);
+    }
 
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
+    // 미리 조회한 데이터를 직접 전달 → RLS 우회
     await showMatchSuccess(requestId, preloaded);
     updateHomeStats();
   } catch(err) {
@@ -2277,181 +2307,17 @@ const _teamMessages = {};
 let _currentChatTeamId = null;
 
 // 메시지 탭 진입 시 신청한 팀 목록 로드
-async function loadChatTeams() {
-  const sel = document.getElementById('chat-team-select');
-  if (!sel) return;
-
-  const profile = state.profile;
-  if (!profile) {
-    sel.innerHTML = '<option value="">로그인이 필요합니다</option>';
-    return;
-  }
-
-  try {
-    // 내 팀 조회
-    const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', profile.id).single();
-
-    if (!myTeam) {
-      sel.innerHTML = '<option value="">등록된 팀이 없습니다</option>';
-      renderMessages();
-      return;
-    }
-
-    // 내 팀이 신청한 / 신청받은 match_requests 조회 (sent + received)
-    const col = profile.gender === 'male' ? 'male_team_id' : 'female_team_id';
-    const oppCol = profile.gender === 'male' ? 'female_team_id' : 'male_team_id';
-
-    const { data: reqs } = await _sb
-      .from('match_requests')
-      .select(`id, status, ${oppCol}`)
-      .eq(col, myTeam.id)
-      .in('status', ['pending', 'matched'])
-      .order('created_at', { ascending: false });
-
-    if (!reqs || reqs.length === 0) {
-      sel.innerHTML = '<option value="">신청/수신한 팀이 없습니다</option>';
-      renderMessages();
-      return;
-    }
-
-    // 상대팀 ID 목록
-    const oppTeamIds = [...new Set(reqs.map(r => r[oppCol]).filter(Boolean))];
-
-    // 상대팀 이름 조회
-    const { data: oppTeams } = await _sb
-      .from('teams').select('id, title, status').in('id', oppTeamIds);
-
-    const teamMap = {};
-    (oppTeams || []).forEach(t => { teamMap[t.id] = t; });
-
-    // 셀렉트 옵션 구성
-    sel.innerHTML = '<option value="">💌 대화할 팀을 선택하세요</option>';
-    reqs.forEach(r => {
-      const oppId = r[oppCol];
-      const t = teamMap[oppId];
-      if (!t) return;
-      const statusLabel = r.status === 'matched' ? '🎉 매칭완료' : '⏳ 검토중';
-      const opt = document.createElement('option');
-      opt.value = oppId;
-      opt.textContent = `${t.title} [${statusLabel}]`;
-      sel.appendChild(opt);
-    });
-
-    // 첫 번째 팀 자동 선택
-    if (oppTeamIds.length > 0) {
-      sel.value = oppTeamIds[0];
-      switchChatTeam(oppTeamIds[0]);
-    } else {
-      renderMessages();
-    }
-
-  } catch(e) {
-    console.warn('[loadChatTeams]', e.message);
-    sel.innerHTML = '<option value="">팀 목록 로드 실패</option>';
-  }
-}
-window.loadChatTeams = loadChatTeams;
-
-// 대화 상대팀 전환
-function switchChatTeam(teamId) {
-  _currentChatTeamId = teamId || null;
-
-  // 헤더 타이틀 업데이트
-  const sel = document.getElementById('chat-team-select');
-  const selected = sel?.options[sel.selectedIndex];
-  const header = document.querySelector('#screen-messages .header-title');
-  if (header) {
-    header.textContent = teamId && selected?.textContent
-      ? `💬 ${selected.textContent.split(' [')[0]}`
-      : '💬 매칭 채팅';
-  }
-
-  renderMessages();
-}
+// 채팅 기능 제거됨 — stub 유지 (하위 호환)
+function loadChatTeams() {}
+function switchChatTeam() {}
+function renderMessages() {}
+function sendFixedMessage() {}
+function sendMessage() { showToast('채팅 서비스는 제공되지 않습니다'); }
+window.loadChatTeams  = loadChatTeams;
 window.switchChatTeam = switchChatTeam;
-
-function renderMessages() {
-  const container = document.getElementById('chat-messages');
-  if (!container) return;
-
-  const messages = _currentChatTeamId
-    ? (_teamMessages[_currentChatTeamId] || [])
-    : [];
-
-  if (!_currentChatTeamId) {
-    container.innerHTML = `
-      <div class="empty-state" style="padding:40px 20px;">
-        <div class="empty-icon">💬</div>
-        <div class="empty-title">대화할 팀을 선택해주세요</div>
-        <div class="empty-desc">위 드롭다운에서 신청한 팀을 선택하면 채팅이 시작됩니다</div>
-      </div>`;
-    return;
-  }
-
-  if (messages.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state" style="padding:40px 20px;">
-        <div class="empty-icon">💬</div>
-        <div class="empty-title">아직 메시지가 없어요</div>
-        <div class="empty-desc">아래 버튼으로 첫 메시지를 보내보세요!</div>
-      </div>`;
-    return;
-  }
-
-  container.innerHTML = '';
-  for (const m of messages) {
-    const group = document.createElement('div');
-    group.className = 'chat-group';
-    group.style.alignItems = m.mine ? 'flex-end' : 'flex-start';
-
-    const bubble = document.createElement('div');
-    bubble.className = `chat-bubble ${m.mine ? 'mine' : 'theirs'}`;
-    bubble.textContent = m.text;
-
-    const time = document.createElement('div');
-    time.className = 'chat-time';
-    time.style.textAlign = m.mine ? 'right' : 'left';
-    time.style.padding = '0 4px';
-    time.textContent = m.time;
-
-    group.appendChild(bubble);
-    group.appendChild(time);
-    container.appendChild(group);
-  }
-  container.scrollTop = container.scrollHeight;
-}
 window.renderMessages = renderMessages;
-
-function _buildTimeStr() {
-  const now = new Date();
-  const h  = now.getHours();
-  const mi = String(now.getMinutes()).padStart(2, '0');
-  return h >= 12 ? `오후 ${h - 12 || 12}:${mi}` : `오전 ${h}:${mi}`;
-}
-
-function sendFixedMessage(text) {
-  if (!state.profile) { showToast('로그인이 필요합니다'); return; }
-  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
-  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
-  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
-  renderMessages();
-}
 window.sendFixedMessage = sendFixedMessage;
-
-function sendMessage() {
-  if (!state.profile) { showToast('로그인이 필요합니다'); return; }
-  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
-  const input = document.getElementById('chat-input');
-  const text  = input?.value.trim();
-  if (!text) return;
-  if (text.length > 200) { showToast('메시지는 200자 이하로 입력해주세요'); return; }
-  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
-  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
-  input.value = '';
-  renderMessages();
-}
-window.sendMessage = sendMessage;
+window.sendMessage    = sendMessage;
 
 // ============================================================
 // 26. 마이페이지 상태 업데이트
@@ -3267,7 +3133,7 @@ async function openAdminUserDetail(userId) {
       <div style="padding:10px 14px;background:var(--navy);font-size:12px;font-weight:700;
         color:rgba(255,255,255,0.85);">🔐 개인정보 (관리자 전용)</div>
       ${iRow('🆔 학번',      esc(u.student_number||'-'))}
-      ${iRow('💬 카카오톡 ID (가입)', esc(u.phone_number||'-'))}
+      ${iRow('📞 전화번호',  esc(u.phone_number||'-'))}
       ${iRow('📅 가입일',    u.created_at ? new Date(u.created_at).toLocaleString('ko-KR') : '-')}
       ${iRow('🔑 Auth UID',  `<span style="font-size:10px;word-break:break-all;">${esc(u.auth_id||'-')}</span>`)}
       ${iRow('📢 마케팅 동의', u.marketing_agree ? '✅ 동의' : '❌ 미동의')}
@@ -3859,9 +3725,9 @@ window.toggleAll = toggleAll;
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
     <!-- 연락처 섹션 -->
     <div class="card card-p" style="margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📸 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
+        매칭 성사 시 상대팀에게만 공개됩니다. 인스타그램 ID는 필수입니다.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
         <label class="form-label">인스타그램 ID <span class="required">*</span></label>
@@ -3871,7 +3737,7 @@ window.toggleAll = toggleAll;
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
         <input class="form-input" type="text" id="contact-kakao" style="height:48px;"
-          placeholder="카카오톡 아이디 입력" maxlength="50" autocomplete="off">
+          placeholder="카카오톡 아이디 (선택)" maxlength="50" autocomplete="off">
       </div>
     </div>
 
