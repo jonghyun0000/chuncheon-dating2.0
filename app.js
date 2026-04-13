@@ -198,34 +198,16 @@ async function initApp() {
 }
 
 async function loadProfile(authUserId) {
-  // 1차 시도
   const { data, error } = await _sb
     .from('users')
     .select('*')
     .eq('auth_id', authUserId)
     .is('deleted_at', null)
-    .maybeSingle();
+    .single();
 
-  if (data) { state.profile = data; return data; }
-
-  // 에러 로그 (디버깅용)
-  if (error) console.warn('[loadProfile] 1차 오류:', error.code, error.message);
-
-  // 2차 재시도 (Auth 세션 동기화 지연 대응)
-  for (let i = 0; i < 3; i++) {
-    await new Promise(r => setTimeout(r, 800));
-    const { data: d2, error: e2 } = await _sb
-      .from('users')
-      .select('*')
-      .eq('auth_id', authUserId)
-      .is('deleted_at', null)
-      .maybeSingle();
-    if (d2) { state.profile = d2; return d2; }
-    if (e2) console.warn(`[loadProfile] ${i+2}차 오류:`, e2.code, e2.message);
-  }
-
-  state.profile = null;
-  return null;
+  if (error || !data) { state.profile = null; return null; }
+  state.profile = data;
+  return data;
 }
 
 function enterAuthenticatedApp() {
@@ -290,8 +272,7 @@ async function doLogin() {
     const profile = await loadProfile(data.user.id);
     if (!profile) {
       await _sb.auth.signOut();
-      // RLS 정책 문제일 가능성 — SQL Editor에서 확인 필요
-      throw new Error('사용자 정보를 찾을 수 없습니다.\n\n해결: Supabase SQL Editor에서 실행:\nDROP POLICY IF EXISTS "users_select_own" ON users;\nCREATE POLICY "users_select_own" ON users FOR SELECT USING (auth_id = auth.uid());');
+      throw new Error('사용자 정보를 찾을 수 없습니다. 관리자에게 문의하세요.');
     }
 
     // ★ 제재 계정 즉시 차단
@@ -865,8 +846,8 @@ async function goToVerification() {
     showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
-  if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
-    showToast('전화번호를 올바르게 입력해주세요 (예: 010-0000-0000)'); return;
+  if (!phoneNum || !/^[a-zA-Z0-9._]{2,50}$/.test(phoneNum)) {
+    showToast('카카오톡 ID를 입력해주세요 (영문·숫자 2자 이상)'); return;
   }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
