@@ -968,7 +968,7 @@
           </div>
           <div style="display:flex;align-items:center;gap:12px;background:white;border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--gray-100);">
             <div style="width:28px;height:28px;background:var(--pink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;font-weight:700;flex-shrink:0;">2</div>
-            <div><p style="font-size:13px;font-weight:700;margin-bottom:1px;">이용료 입금</p><p style="font-size:11px;color:var(--gray-500);">팀 등록 1건당 · 남성 5,000원 / 여성 3,000원</p></div>
+            <div><p style="font-size:13px;font-weight:700;margin-bottom:1px;">이용료 입금</p><p style="font-size:11px;color:var(--gray-500);">팀 등록 1건당 · 남 5,000원 / 여 3,000원</p></div>
           </div>
           <div style="display:flex;align-items:center;gap:12px;background:white;border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--gray-100);">
             <div style="width:28px;height:28px;background:var(--pink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;font-weight:700;flex-shrink:0;">3</div>
@@ -1043,7 +1043,7 @@
       </div>
       <div class="step">
         <div class="step-circle">3</div>
-        <span class="step-label">입금</span>
+        <span class="step-label">검토</span>
       </div>
     </div>
     <div class="scroll-content" style="padding:0 20px 24px;">
@@ -1210,7 +1210,7 @@
     <div class="progress-steps">
       <div class="step done"><div class="step-circle">✓</div><span class="step-label">기본정보</span></div>
       <div class="step active"><div class="step-circle">2</div><span class="step-label">학생인증</span></div>
-      <div class="step"><div class="step-circle">3</div><span class="step-label">입금</span></div>
+      <div class="step"><div class="step-circle">3</div><span class="step-label">검토</span></div>
     </div>
     <div class="scroll-content" style="padding:0 20px 24px;">
       <div style="margin-bottom:20px;">
@@ -1269,11 +1269,11 @@
             ✅ 학생증 업로드 완료<br>
             ⏳ 관리자 검토 중<br>
             ⬜ 인증 승인<br>
-            ⬜ 입금 완료<br>
+
             ⬜ 서비스 시작
           </p>
         </div>
-        <button class="btn btn-secondary" onclick="showScreen('screen-deposit')">입금 먼저 하기</button>
+        
         <button class="btn btn-ghost" style="margin-top:8px;color:var(--purple);" onclick="showScreen('screen-preview')">👀 미리보기로 둘러보기</button>
       </div>
 
@@ -1299,7 +1299,7 @@
     <div class="progress-steps">
       <div class="step done"><div class="step-circle">✓</div><span class="step-label">기본정보</span></div>
       <div class="step done"><div class="step-circle">✓</div><span class="step-label">학생인증</span></div>
-      <div class="step active"><div class="step-circle">3</div><span class="step-label">입금</span></div>
+      <div class="step active"><div class="step-circle">3</div><span class="step-label">검토</span></div>
     </div>
     <div class="scroll-content" style="padding:0 20px 24px;">
       <div class="deposit-account-card">
@@ -1645,70 +1645,6 @@
     </div>
   </div>
 
-
-  <!-- ───── TEAM DEPOSIT ───── -->
-  <div class="screen" id="screen-team-deposit">
-    <div class="header">
-      <button class="btn-back" onclick="showScreen('screen-team-register')">←</button>
-      <span class="header-title">팀 등록 입금 안내</span>
-      <div style="width:36px;"></div>
-    </div>
-    <div class="scroll-content" style="padding:24px 20px;">
-      <div style="text-align:center;margin-bottom:24px;">
-        <div style="font-size:48px;margin-bottom:8px;">💳</div>
-        <h2 style="font-size:20px;font-weight:700;margin-bottom:6px;">이용료 입금 안내</h2>
-        <p style="font-size:13px;color:var(--gray-500);">입금 확인 후 관리자가 팀을 승인합니다</p>
-      </div>
-
-      <div class="deposit-account-card" style="margin-bottom:20px;">
-        <div class="deposit-bank">신한은행</div>
-        <div class="deposit-account-num">110-498-811897</div>
-        <div class="deposit-holder">예금주: 이종현</div>
-      </div>
-
-      <div class="card card-p" style="margin-bottom:16px;">
-        <p style="font-size:13px;font-weight:700;margin-bottom:12px;">💰 이용료</p>
-        <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100);">
-          <span style="font-size:13px;color:var(--gray-600);">👨 남성팀</span>
-          <span style="font-size:15px;font-weight:700;color:var(--navy);">5,000원</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:10px 0;">
-          <span style="font-size:13px;color:var(--gray-600);">👩 여성팀</span>
-          <span style="font-size:15px;font-weight:700;color:var(--pink);">3,000원</span>
-        </div>
-        <p style="font-size:11px;color:var(--gray-400);margin-top:6px;">팀 3인 기준 · 등록 1건당 부과</p>
-      </div>
-
-      <div class="card card-p" style="margin-bottom:16px;background:var(--gray-50);">
-        <p style="font-size:13px;font-weight:700;margin-bottom:10px;">📋 입금 방법</p>
-        <div style="font-size:12px;color:var(--gray-600);line-height:1.9;">
-          1. 위 계좌로 이용료를 입금해주세요<br>
-          2. 입금자명은 <strong>카카오톡 ID 또는 닉네임</strong>으로 입력<br>
-          3. 아래 버튼을 눌러 입금 완료를 알려주세요<br>
-          4. 관리자 확인 후 팀이 홈에 공개됩니다
-        </div>
-      </div>
-
-      <div class="form-group" style="margin-bottom:16px;">
-        <label class="form-label">입금자명 <span class="required">*</span></label>
-        <input class="form-input" id="team-depositor-name" type="text"
-          placeholder="입금 시 사용한 이름" maxlength="30" autocomplete="off">
-      </div>
-
-      <button class="btn btn-primary" id="btn-team-deposit" onclick="submitTeamDeposit()" style="margin-bottom:10px;">
-        ✅ 입금 완료했습니다
-      </button>
-      <button class="btn btn-outline" onclick="showScreen('screen-home')">
-        나중에 입금하기
-      </button>
-
-      <div class="info-box" style="margin-top:16px;">
-        <span class="info-box-icon">⚠️</span>
-        <span style="font-size:12px;">입금 확인 전까지 팀이 공개되지 않습니다. 입금 후 수 시간 내 승인됩니다.</span>
-      </div>
-    </div>
-  </div>
-
   <!-- ───── TEAM REGISTER ───── -->
   <div class="screen" id="screen-team-register">
     <div class="header">
@@ -1930,7 +1866,6 @@
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('users',this)">👤 회원관리</button>
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('verif',this)">🎓 인증관리</button>
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('deposit',this)">💳 입금관리</button>
-      <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('team-approve',this)">✅ 팀승인</button>
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('teams',this)">👥 팀관리</button>
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('reports',this)">🚨 신고</button>
       <button class="filter-chip" style="border-radius:0;border:none;padding:12px 14px;white-space:nowrap;font-size:13px;" onclick="switchAdminTab('reviews',this)">✏️ 후기관리</button>
@@ -1988,7 +1923,7 @@
         <div style="background:var(--gray-50);border:1px solid var(--gray-200);
           border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;text-align:left;">
           <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px;">신고 접수 이메일</div>
-          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="5d37323533026c6f6c6a1d333c2b382f733e3230">[email&#160;protected]</a></div>
+          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="3b51545355640a090a0c7b555a4d5e4915585456">[email&#160;protected]</a></div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:6px;line-height:1.6;">
             • 신고 유형 (허위 프로필 / 욕설 / 성희롱 / 기타)<br>
             • 신고 내용을 상세히 작성해 보내주세요<br>
@@ -2190,7 +2125,6 @@
 
   </div><!-- #app end -->
   <div id="toast" aria-live="polite"></div>
-
 </body>
 <script src="./app.js"></script>
 </html>
