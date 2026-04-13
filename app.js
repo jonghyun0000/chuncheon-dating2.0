@@ -33,7 +33,6 @@ const _sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY
 // ============================================================
 // 2. 전역 상태 (단일 진실 원천)
 // ============================================================
-let _matchContactPhone='',_matchContactKakao='',_matchContactName='';
 const state = {
   authUser:      null,   // Supabase auth.user
   profile:       null,   // users 테이블 row
@@ -43,7 +42,7 @@ const state = {
   regData:       null,   // 회원가입 임시 데이터
   uploadedFile:  null    // 학생증 파일 객체
 };
-// window.state 제거
+window.state = state;
 
 // ============================================================
 // 3. XSS 방어 유틸 (innerHTML 사용 시 반드시 통과)
@@ -199,8 +198,13 @@ async function initApp() {
 }
 
 async function loadProfile(authUserId) {
-  let { data } = await _sb.from('users').select('*')
-    .eq('auth_id', authUserId).is('deleted_at', null).maybeSingle();
+  let { data } = await _sb
+    .from('users')
+    .select('*')
+    .eq('auth_id', authUserId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
   if (!data) {
     for (let i = 0; i < 2; i++) {
       await new Promise(r => setTimeout(r, 700));
@@ -209,6 +213,7 @@ async function loadProfile(authUserId) {
       if (r2.data) { data = r2.data; break; }
     }
   }
+
   if (!data) { state.profile = null; return null; }
   state.profile = data;
   return data;
@@ -556,7 +561,7 @@ window.doFindAccount = doFindAccount;
 function doForgotPassword() { doFindAccount('pw'); }
 window.doForgotPassword = doForgotPassword;
 async function doAdminLogin() {
-  const usernameRaw = document.getElementById('admin-id')?.value.trim().toLowerCase();
+  const usernameRaw = document.getElementById('admin-id')?.value.trim();
   const password    = document.getElementById('admin-pw')?.value;
 
   if (!usernameRaw || !password) { showToast('아이디와 비밀번호를 입력하세요'); return; }
@@ -648,7 +653,7 @@ async function updateBadges() {
   try {
     // 내 팀 조회
     const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', profile.id).maybeSingle();
+      .from('teams').select('id').eq('leader_id', profile.id).single();
 
     let pendingCount = 0;
     if (myTeam) {
@@ -850,8 +855,8 @@ async function goToVerification() {
     showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
-  if (!phoneNum || !/^[a-zA-Z0-9._]{2,50}$/.test(phoneNum)) {
-    showToast('카카오톡 ID를 입력해주세요 (영문·숫자 2자 이상)'); return;
+  if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호를 올바르게 입력해주세요 (예: 010-0000-0000)'); return;
   }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
@@ -1036,19 +1041,26 @@ async function submitVerification() {
         marketing_agree: d.marketing_agree,
         profile_active:  false
       };
-      const extraFields = {};
-      if (d.phone_number) extraFields.phone_number = d.phone_number;
-      if (d.custom_badge)  extraFields.custom_badge  = d.custom_badge;
+      // phone_number 컬럼이 DB에 추가된 경우에만 포함
+      if (d.phone_number) insertPayload.phone_number = d.phone_number;
+      // custom_badge 컬럼이 DB에 있는 경우에만 포함 (없으면 무시)
+      if (d.custom_badge) insertPayload.custom_badge = d.custom_badge;
 
       let newP, profileErr;
-      ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().maybeSingle());
-      if (profileErr) {
-        await new Promise(r => setTimeout(r, 500));
-        ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().maybeSingle());
-      }
-      if (!profileErr && newP && Object.keys(extraFields).length > 0) {
-        await _sb.from('users').update(extraFields).eq('id', newP.id);
-        Object.assign(newP, extraFields);
+      ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
+
+      // ★ 컬럼 없음(PGRST204) 또는 schema cache 오류 → 선택 컬럼 제거 후 재시도
+      const isMissingCol = (e) =>
+        e?.code === 'PGRST204' ||
+        e?.message?.includes('schema cache') ||
+        e?.message?.includes('Could not find');
+
+      if (profileErr && isMissingCol(profileErr)) {
+        console.warn('[SV] 선택 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
+        // custom_badge, phone_number 제거 후 재시도
+        delete insertPayload.custom_badge;
+        delete insertPayload.phone_number;
+        ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
       }
 
       if (profileErr) {
@@ -1114,18 +1126,37 @@ async function submitVerification() {
     const safeName = `${Date.now()}_${Math.random().toString(36).slice(2,7)}.${fileExt}`;
     const filePath = `verifications/${signUpUid}/${safeName}`;
 
-    let uploadedPath = filePath;
     const { error: uploadErr } = await _sb.storage
       .from('student-verifications')
       .upload(filePath, file, { contentType: file.type, upsert: true });
+
     if (uploadErr) {
-      console.warn('[SV] Storage 업로드 실패(무시):', uploadErr.message);
-      uploadedPath = null;
+      const code = uploadErr.statusCode ?? '';
+      const msg  = uploadErr.message ?? '';
+      let guide  = '';
+
+      if (msg.includes('Bucket not found') || msg.includes('bucket')) {
+        guide = '스토리지 버킷(student-verifications)이 없습니다. ' +
+                'Supabase → Storage에서 "student-verifications" 버킷을 생성하세요.';
+      } else if (code === '403' || msg.includes('security') || msg.includes('policy') || msg.includes('RLS')) {
+        guide = 'Storage 권한 오류입니다. Supabase → Storage → Policies에서\n' +
+                '"student-verifications" 버킷에 아래 INSERT 정책을 추가하세요:\n' +
+                'USING: bucket_id = \'student-verifications\'\n' +
+                'CHECK: name LIKE \'verifications/\' || auth.uid() || \'/%\'';
+      } else if (code === '409' || msg.includes('Duplicate') || msg.includes('already exists')) {
+        // upsert:true인데도 409면 RLS가 UPDATE도 막는 것 → 정책 안내
+        guide = '파일 중복 오류입니다. 잠시 후 다시 시도해주세요.';
+      } else if (msg.includes('size') || msg.includes('limit') || msg.includes('too large')) {
+        guide = `파일 크기 제한 초과 (${fileSizeMB}MB). 10MB 이하 파일을 사용해주세요.`;
+      } else {
+        guide = `이미지 업로드 실패 [${code}]: ${msg}`;
+      }
+      throw new Error(guide);
     }
 
     // ── STEP 5: student_verifications 저장 (이미 있으면 무시)
     const { error: verifErr } = await _sb.from('student_verifications').insert({
-      user_id: profile.id, image_path: uploadedPath, status: 'pending'
+      user_id: profile.id, image_path: filePath, status: 'pending'
     });
     if (verifErr && verifErr.code !== '23505') {
       throw new Error(`인증 정보 저장 실패 [${verifErr.code}]: ${verifErr.message}`);
@@ -1145,8 +1176,8 @@ async function submitVerification() {
     state.profile = profile;
     state.regData = null;
     setText('home-username', profile.nickname + '님');
-    showToast('🎉 가입 완료! 학생증 검토 중입니다.');
-    showScreen('screen-home');
+    showToast('🎉 가입 완료! 학생증 검토 후 활성화됩니다');
+    showScreen('screen-deposit');
 
   } catch (err) {
     console.error('[submitVerification]', err);
@@ -1171,11 +1202,11 @@ async function submitDeposit() {
 
   setBtnLoading('btn-deposit', true, '입금 완료했습니다 ✓');
   try {
-    let { error } = await _sb.from('deposits').insert({ user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' });
-    if (error?.code === '23505') {
-      const { error: ue } = await _sb.from('deposits').update({ depositor_name: name, amount, status: 'pending_confirm' }).eq('user_id', profile.id);
-      if (ue) throw ue;
-    } else if (error) { throw error; }
+    const { error } = await _sb.from('deposits').upsert(
+      { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' },
+      { onConflict: 'user_id' }
+    );
+    if (error) throw new Error('입금 신청 저장 실패 (RLS 정책 오류 — Supabase SQL Editor에서 deposits 테이블 INSERT 정책을 확인하세요): ' + error.message);
 
     showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
     showScreen('screen-pending');
@@ -1546,7 +1577,9 @@ async function registerTeam() {
     if (!dept || dept.length < 2)     { showToast(`팀원 ${i}의 학과를 입력해주세요`); return; }
 
     if (i > 1) {
-      // 인증 확인 체크박스 선택사항
+      if (!document.getElementById(`verif-confirm-${i}`)?.checked) {
+        showToast(`팀원 ${i}의 인증 확인 체크박스를 체크해주세요`); return;
+      }
     }
 
     const smoking = document.querySelector(`input[name="smoke${i}"]:checked`)?.id === `s${i}`;
@@ -1566,7 +1599,10 @@ async function registerTeam() {
   // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
   const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
   const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
-  if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
+  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
+  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
+  }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
@@ -1589,7 +1625,7 @@ async function registerTeam() {
       contact_phone: phoneNum  || null,
       contact_kakao: kakaoId   || null,
       is_verified:   isVerified
-    }).select().maybeSingle());
+    }).select().single());
 
     // 시도 2: is_verified 제외
     if (teamErr && isMissingCol(teamErr)) {
@@ -1601,7 +1637,7 @@ async function registerTeam() {
         status:        'recruiting',
         contact_phone: phoneNum || null,
         contact_kakao: kakaoId  || null
-      }).select().maybeSingle());
+      }).select().single());
     }
 
     // 시도 3: contact_kakao 제외
@@ -1613,7 +1649,7 @@ async function registerTeam() {
         university:    profile.university,
         status:        'recruiting',
         contact_phone: phoneNum || null
-      }).select().maybeSingle());
+      }).select().single());
     }
 
     // 시도 4: contact_phone도 제외
@@ -1624,7 +1660,7 @@ async function registerTeam() {
         title,
         university: profile.university,
         status:     'recruiting'
-      }).select().maybeSingle());
+      }).select().single());
     }
 
     // 시도 5: contact_phone도 제외
@@ -1635,7 +1671,7 @@ async function registerTeam() {
         title,
         university: profile.university,
         status:     'recruiting'
-      }).select().maybeSingle());
+      }).select().single());
     }
 
     if (teamErr) throw new Error('팀 등록 실패: ' + teamErr.message);
@@ -1777,9 +1813,15 @@ async function openApplyScreen(teamId) {
     const { data: myTeam, error } = await _sb.from('teams')
       .select('*, team_members(*)')
       .eq('leader_id', state.profile.id)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle();
-    if (error){if(preview)preview.innerHTML=`<p style="color:var(--error);padding:12px;">${esc(error.message)}</p>`;return;}
-    if (!myTeam){if(preview)preview.innerHTML='';if(noBanner)noBanner.style.display='block';if(submitBtn)submitBtn.style.display='none';return;}
+      .single();
+
+    if (error || !myTeam) {
+      if (preview)  preview.innerHTML = '';
+      if (noBanner) noBanner.style.display = 'block';
+      // 신청 버튼 숨김 확실히
+      if (submitBtn) submitBtn.style.display = 'none';
+      return;
+    }
 
     // 내 팀 미리보기 렌더
     const members = myTeam.team_members || [];
@@ -1849,7 +1891,7 @@ async function submitApply() {
   if (!targetTeam) {
     const { data: fetched } = await _sb
       .from('teams').select('id, gender, title, status')
-      .eq('id', targetTeamId).maybeSingle();
+      .eq('id', targetTeamId).single();
     targetTeam = fetched;
   }
   if (!targetTeam) { showToast('❌ 대상팀 정보를 찾을 수 없습니다.'); return; }
@@ -1871,10 +1913,13 @@ async function submitApply() {
   try {
     // 내 팀 조회
     const { data: myTeam, error: teamErr } = await _sb.from('teams')
-      .select('id').eq('leader_id', profile.id)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle();
-    if (teamErr){showToast('❌ 팀 조회 오류: '+teamErr.message);return;}
-    if (!myTeam){showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.');return;}
+      .select('id')
+      .eq('leader_id', profile.id)
+      .single();
+
+    if (teamErr || !myTeam) {
+      showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.'); return;
+    }
 
     // 자기 팀에는 신청 불가
     if (myTeam.id === targetTeamId) {
@@ -1886,9 +1931,13 @@ async function submitApply() {
     const insertData = { status: 'pending', created_at: new Date().toISOString() };
     if (message) insertData.message = message;
 
-    // female=신청자, male=피신청자
-    insertData.female_team_id = myTeam.id;
-    insertData.male_team_id   = targetTeamId;
+    if (profile.gender === 'male') {
+      insertData.male_team_id   = myTeam.id;
+      insertData.female_team_id = targetTeamId;
+    } else {
+      insertData.female_team_id = myTeam.id;
+      insertData.male_team_id   = targetTeamId;
+    }
 
     const { error } = await _sb.from('match_requests').insert(insertData);
 
@@ -1930,46 +1979,129 @@ window.submitApply = submitApply;
 async function loadAndRenderRequests(tab) {
   const container = document.getElementById('requests-content');
   if (!container) return;
+
   container.innerHTML = '<div style="text-align:center;padding:24px;"><div class="spinner"></div></div>';
+
   try {
-    const { data: myTeam, error: te } = await _sb.from('teams')
-      .select('id').eq('leader_id', state.profile?.id)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle();
-    if (te) throw te;
+    // 내 팀 조회
+    const { data: myTeam } = await _sb.from('teams')
+      .select('id').eq('leader_id', state.profile?.id).single();
+
     if (!myTeam) {
-      container.innerHTML = `<div class="empty-state"><div class="empty-icon">${tab==='sent'?'💌':'📬'}</div><div class="empty-title">팀이 없습니다</div><div class="empty-desc">팀을 등록하면 신청 내역이 표시됩니다</div></div>`;
+      container.innerHTML = `<div class="empty-state">
+        <div class="empty-icon">${tab==='sent'?'💌':'📬'}</div>
+        <div class="empty-title">팀이 없습니다</div>
+        <div class="empty-desc">팀을 등록하면 신청 내역이 표시됩니다</div>
+      </div>`;
       return;
     }
-    const SL={pending:'⏳ 검토 대기',reviewing:'🔍 검토중',accepted:'✅ 수락',rejected:'❌ 거절',matched:'🎉 매칭완료',expired:'만료'};
-    const SC={pending:'chip-orange',reviewing:'chip-purple',accepted:'chip-green',rejected:'chip-red',matched:'chip-green',expired:'chip-gray'};
-    let data,error;
-    if (tab==='sent') {
-      ({data,error}=await _sb.from('match_requests')
-        .select('*,male_team_id,female_team_id,teams!match_requests_male_team_id_fkey(title,university)')
-        .eq('female_team_id',myTeam.id).order('created_at',{ascending:false}));
+
+    const STATUS_LABEL = {
+      pending:'⏳ 검토 대기', reviewing:'🔍 검토중', accepted:'✅ 수락',
+      rejected:'❌ 거절', matched:'🎉 매칭완료', expired:'만료'
+    };
+    const STATUS_CLS = {
+      pending:'chip-orange', reviewing:'chip-purple', accepted:'chip-green',
+      rejected:'chip-red', matched:'chip-green', expired:'chip-gray'
+    };
+
+    let data, error;
+    const profile = state.profile;
+    const gender  = profile?.gender;
+
+    if (tab === 'sent') {
+      // 내가 보낸 신청 = 내 팀이 신청자 측
+      // 여성팀이 남성팀에게 신청 → female_team_id = 내 팀
+      // 남성팀이 여성팀에게 신청 → male_team_id = 내 팀
+      if (gender === 'female') {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
+          .eq('female_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
+      } else {
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
+          .order('created_at', { ascending: false }));
+      }
     } else {
-      ({data,error}=await _sb.from('match_requests')
-        .select('*,male_team_id,female_team_id,teams!match_requests_female_team_id_fkey(title,university)')
-        .eq('male_team_id',myTeam.id).order('created_at',{ascending:false}));
+      // 받은 신청 = 상대팀이 내 팀에게 신청한 것 = 반대 컬럼이 내 팀
+      // 내가 남성팀 → 여성팀이 나에게 신청 → female_team_id는 상대, male_team_id = 내 팀
+      //   BUT: 이 경우 내가 보낸 것도 male_team_id=내팀이므로 구분 불가
+      //   → 실제 서비스 로직: 여성이 남성에게 신청하는 구조
+      //   → 남성 received = female_team_id = 상대가 신청자, male_team_id = 내팀
+      //   → 여성 received = 없음 (여성은 신청만 함)
+      if (gender === 'male') {
+        // 남성팀이 받은 신청 = 여성팀이 신청한 것 → male_team_id = 내팀
+        // sent랑 같은 조건이지만 received는 status=pending인 것만 (아직 처리 안 된 것)
+        // 단, sent에서 이미 보여주므로 received는 "상대방이 보낸 신청"
+        // → 현재 구조상 남성 received와 sent가 동일 → received 탭을 숨기거나 
+        //   "받은 신청" = 여성팀(상대)이 신청한 건 = male_team_id=내팀 + status=pending
+        ({ data, error } = await _sb.from('match_requests')
+          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+          .eq('male_team_id', myTeam.id)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false }));
+      } else {
+        // 여성팀이 받은 신청 = 없음 (여성이 신청하는 구조)
+        // 빈 배열 반환
+        data = [];
+        error = null;
+      }
     }
+
     if (error) throw error;
-    if (!data||data.length===0) {
-      container.innerHTML=`<div class="empty-state"><div class="empty-icon">${tab==='sent'?'💌':'📬'}</div><div class="empty-title">${tab==='sent'?'보낸 신청이 없어요':'받은 신청이 없어요'}</div></div>`;
+
+    if (!data || data.length === 0) {
+      container.innerHTML = `<div class="empty-state">
+        <div class="empty-icon">${tab==='sent'?'💌':'📬'}</div>
+        <div class="empty-title">${tab==='sent'?'보낸 신청이 없어요':'받은 신청이 없어요'}</div>
+      </div>`;
       return;
     }
-    container.innerHTML=data.map(r=>{
-      const td=r.teams,tn=td?.title||'-',tu=td?.university||'-';
-      const lb=SL[r.status]||r.status,cl=SC[r.status]||'chip-gray';
-      const dt=new Date(r.created_at).toLocaleDateString('ko-KR');
-      const isM=r.status==='matched',isPR=r.status==='pending'&&tab==='received';
-      const oppId=tab==='sent'?r.male_team_id:r.female_team_id;
-      let btns='';
-      if(isM) btns=`<button class="btn btn-primary btn-sm" style="flex:1;" onclick="showMatchContactDirect('${esc(r.id)}','${esc(oppId||'')}')">🎉 연락처 보기</button>`;
-      else if(isPR) btns=`<button class="btn btn-primary btn-sm" style="flex:1;" onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button><button class="btn btn-danger btn-sm" style="flex:1;" onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`;
-      return `<div class="card card-p"><div style="display:flex;justify-content:space-between;margin-bottom:10px;"><div><p style="font-size:16px;font-weight:700;">${esc(tn)}</p><p style="font-size:12px;color:var(--gray-500);">${esc(tu)} · ${esc(dt)}</p></div><span class="chip ${cl}">${esc(lb)}</span></div>${btns?`<div style="display:flex;gap:8px;">${btns}</div>`:''}</div>`;
+
+    container.innerHTML = data.map(r => {
+      const teamData = tab === 'sent' ? r.teams : r['teams'];
+      const teamName = teamData?.title || '-';
+      const teamUniv = teamData?.university || '-';
+      const label    = STATUS_LABEL[r.status] || r.status;
+      const cls      = STATUS_CLS[r.status]   || 'chip-gray';
+      const date     = new Date(r.created_at).toLocaleDateString('ko-KR');
+      const isMatched   = r.status === 'matched';
+      const isPendingRecv = r.status === 'pending' && tab === 'received';
+      return `
+      <div class="card card-p">
+        <div style="display:flex;justify-content:space-between;margin-bottom:10px;">
+          <div>
+            <p style="font-size:16px;font-weight:700;">${esc(teamName)}</p>
+            <p style="font-size:12px;color:var(--gray-500);">${esc(teamUniv)} · ${esc(date)}</p>
+          </div>
+          <span class="chip ${cls}">${esc(label)}</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          ${isMatched
+            ? `<button class="btn btn-primary btn-sm" style="flex:1;"
+                onclick="showMatchSuccess('${esc(r.id)}')">🎉 연결 정보 보기</button>`
+            : ''}
+          ${isPendingRecv
+            ? `<button class="btn btn-primary btn-sm" style="flex:1;"
+                onclick="acceptMatchRequest('${esc(r.id)}')">✅ 수락</button>
+               <button class="btn btn-outline btn-sm" style="flex:1;"
+                onclick="rejectMatchRequest('${esc(r.id)}')">❌ 거절</button>`
+            : ''}
+          ${!isMatched && !isPendingRecv
+            ? `<button class="btn btn-outline btn-sm"
+                onclick="switchTab('messages')">💬 후기</button>`
+            : ''}
+        </div>
+      </div>`;
     }).join('');
   } catch(err) {
-    container.innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">오류가 발생했습니다</div><div class="empty-desc">${esc(err.message)}</div></div>`;
+    container.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">⚠️</div>
+      <div class="empty-title">오류가 발생했습니다</div>
+      <div class="empty-desc">${esc(err.message)}</div>
+    </div>`;
   }
 }
 window.loadAndRenderRequests = loadAndRenderRequests;
@@ -2000,9 +2132,9 @@ async function showMatchSuccess(requestId, preloadedData) {
     if (phoneEl) phoneEl.textContent = preloadedData.phone || '미등록';
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = preloadedData.kakao || '미등록';
-    _matchContactPhone = preloadedData.phone || '';
-    _matchContactKakao = preloadedData.kakao || '';
-    _matchContactName  = preloadedData.teamName || '상대팀';
+    window._matchContactPhone = preloadedData.phone || '';
+    window._matchContactKakao = preloadedData.kakao || '';
+    window._matchContactName  = preloadedData.teamName || '상대팀';
     return;
   }
 
@@ -2015,7 +2147,7 @@ async function showMatchSuccess(requestId, preloadedData) {
 
     // 내 팀 조회
     const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', profile.id).maybeSingle();
+      .from('teams').select('id').eq('leader_id', profile.id).single();
     if (!myTeam) return;
 
     // match_requests 조회 — RLS SELECT 정책이 있어야 동작
@@ -2023,7 +2155,7 @@ async function showMatchSuccess(requestId, preloadedData) {
       .from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId)
-      .maybeSingle();
+      .single();
 
     if (reqErr || !req) {
       // RLS로 조회 안 되는 경우 — matched 상태인 내 팀의 상대팀을 다른 방법으로 찾기
@@ -2035,7 +2167,7 @@ async function showMatchSuccess(requestId, preloadedData) {
         .eq('status', 'matched')
         .order('created_at', { ascending: false })
         .limit(1)
-        .maybeSingle();
+        .single();
 
       if (!altReq) { console.warn('[showMatchSuccess] 매칭 정보 조회 실패'); return; }
 
@@ -2062,7 +2194,7 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
     .from('teams')
     .select('title, contact_phone, contact_kakao')
     .eq('id', opponentTeamId)
-    .maybeSingle();
+    .single();
 
   if (oppTeam) {
     setText('match-success-team-name', oppTeam.title || '상대팀');
@@ -2070,44 +2202,17 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
     if (phoneEl) phoneEl.textContent = oppTeam.contact_phone || '미등록';
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = oppTeam.contact_kakao || '미등록';
-    _matchContactPhone = oppTeam.contact_phone || '';
-    _matchContactKakao = oppTeam.contact_kakao || '';
-    _matchContactName  = oppTeam.title || '상대팀';
+    window._matchContactPhone = oppTeam.contact_phone || '';
+    window._matchContactKakao = oppTeam.contact_kakao || '';
+    window._matchContactName  = oppTeam.title || '상대팀';
   }
 }
 
-async function _fetchAndShowOpp(oppId) {
-  if(!oppId)return;
-  const {data:opp}=await _sb.from('teams').select('title,contact_phone,contact_kakao,leader_id').eq('id',oppId).maybeSingle();
-  const pe=document.getElementById('match-contact-phone'),ke=document.getElementById('match-contact-kakao');
-  if(opp){
-    setText('match-success-team-name',opp.title||'상대팀');
-    let phone=opp.contact_phone||'';
-    if(!phone&&opp.leader_id){const{data:ldr}=await _sb.from('users').select('phone_number').eq('id',opp.leader_id).maybeSingle();if(ldr?.phone_number)phone=ldr.phone_number;}
-    if(pe)pe.textContent=phone||'미등록';if(ke)ke.textContent=opp.contact_kakao||'미등록';
-    _matchContactPhone=phone;_matchContactKakao=opp.contact_kakao||'';_matchContactName=opp.title||'상대팀';
-  }else{if(pe)pe.textContent='미등록';if(ke)ke.textContent='미등록';}
-}
-async function showMatchContactDirect(requestId,oppTeamId){
-  showScreen('screen-match-success');
-  const pe=document.getElementById('match-contact-phone'),ke=document.getElementById('match-contact-kakao');
-  if(pe)pe.textContent='불러오는 중...';if(ke)ke.textContent='불러오는 중...';
-  try{
-    if(oppTeamId&&/^[0-9a-f-]{36}$/i.test(oppTeamId)){await _fetchAndShowOpp(oppTeamId);return;}
-    const{data:mt}=await _sb.from('teams').select('id').eq('leader_id',state.profile?.id).order('created_at',{ascending:false}).limit(1).maybeSingle();
-    if(!mt)return;
-    const{data:rq}=await _sb.from('match_requests').select('male_team_id,female_team_id').eq('id',requestId).maybeSingle();
-    const oid=rq?(mt.id===rq.male_team_id?rq.female_team_id:rq.male_team_id):null;
-    if(oid)await _fetchAndShowOpp(oid);else{if(pe)pe.textContent='미등록';if(ke)ke.textContent='미등록';}
-  }catch(e){if(pe)pe.textContent='미등록';if(ke)ke.textContent='미등록';}
-}
-window.showMatchContactDirect=showMatchContactDirect;
-
 // 연락처 저장 (vCard 다운로드)
 function saveMatchContact() {
-  const phone = (_matchContactPhone || '').trim();
-  const kakao = (_matchContactKakao || '').trim();
-  const name  = (_matchContactName  || '상대팀').trim();
+  const phone = (window._matchContactPhone || '').trim();
+  const kakao = (window._matchContactKakao || '').trim();
+  const name  = (window._matchContactName  || '상대팀').trim();
   if (!phone && !kakao) { showToast('저장할 연락처가 없습니다.'); return; }
 
   if (phone) {
@@ -2134,34 +2239,59 @@ window.saveMatchContact = saveMatchContact;
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
-    const {data:req} = await _sb.from('match_requests')
-      .select('male_team_id,female_team_id').eq('id',requestId).maybeSingle();
-    if (!req?.male_team_id||!req?.female_team_id){showToast('❌ 신청 정보를 찾을 수 없습니다.');return;}
-    const {data:myTeam} = await _sb.from('teams').select('id')
-      .eq('leader_id',state.profile?.id).order('created_at',{ascending:false}).limit(1).maybeSingle();
-    const oppId = myTeam?.id===req.male_team_id ? req.female_team_id : req.male_team_id;
-    let preloaded=null;
-    if (oppId) {
-      const {data:opp} = await _sb.from('teams')
-        .select('title,contact_phone,contact_kakao,leader_id').eq('id',oppId).maybeSingle();
-      if (opp) {
-        let phone=opp.contact_phone||'';
-        if (!phone&&opp.leader_id){
-          const {data:ldr}=await _sb.from('users').select('phone_number').eq('id',opp.leader_id).maybeSingle();
-          if(ldr?.phone_number) phone=ldr.phone_number;
-        }
-        preloaded={teamName:opp.title,phone,kakao:opp.contact_kakao};
+    // match_request에서 상대팀 ID 먼저 파악 (업데이트 전에 읽기)
+    const { data: reqBefore } = await _sb
+      .from('match_requests')
+      .select('male_team_id, female_team_id')
+      .eq('id', requestId)
+      .single();
+
+    // match_request 상태 → matched
+    const { error: reqErr } = await _sb.from('match_requests').update({
+      status: 'matched', responded_at: new Date().toISOString()
+    }).eq('id', requestId);
+    if (reqErr) throw reqErr;
+
+    // 내 팀 파악
+    const { data: myTeam } = await _sb
+      .from('teams').select('id').eq('leader_id', state.profile?.id).single();
+
+    // 상대팀 ID 결정
+    let opponentTeamId = null;
+    if (reqBefore && myTeam) {
+      opponentTeamId = myTeam.id === reqBefore.male_team_id
+        ? reqBefore.female_team_id
+        : reqBefore.male_team_id;
+    }
+
+    // 상대팀 연락처 미리 조회 (contact_kakao 포함)
+    let preloaded = null;
+    if (opponentTeamId) {
+      const { data: oppTeam } = await _sb
+        .from('teams')
+        .select('title, contact_phone, contact_kakao')
+        .eq('id', opponentTeamId)
+        .single();
+      if (oppTeam) {
+        preloaded = { teamName: oppTeam.title, phone: oppTeam.contact_phone, kakao: oppTeam.contact_kakao };
       }
     }
-    const {error:reqErr}=await _sb.from('match_requests')
-      .update({status:'matched',responded_at:new Date().toISOString()}).eq('id',requestId);
-    if(reqErr) throw reqErr;
-    await _sb.from('teams').update({status:'matched',is_visible:false}).eq('id',req.male_team_id);
-    await _sb.from('teams').update({status:'matched',is_visible:false}).eq('id',req.female_team_id);
+
+    // 양쪽 팀 status → matched, is_visible → false
+    const teamIds = [reqBefore?.male_team_id, reqBefore?.female_team_id].filter(Boolean);
+    if (teamIds.length > 0) {
+      await _sb.from('teams')
+        .update({ status: 'matched', is_visible: false })
+        .in('id', teamIds);
+    }
+
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
-    await showMatchSuccess(requestId,preloaded);
+    // 미리 조회한 데이터를 직접 전달 → RLS 우회
+    await showMatchSuccess(requestId, preloaded);
     updateHomeStats();
-  } catch(err){showToast('❌ 수락 처리 오류: '+err.message);}
+  } catch(err) {
+    showToast('❌ 수락 처리 오류: ' + err.message);
+  }
 }
 window.acceptMatchRequest = acceptMatchRequest;
 
@@ -2188,14 +2318,181 @@ const _teamMessages = {};
 let _currentChatTeamId = null;
 
 // 메시지 탭 진입 시 신청한 팀 목록 로드
-function loadChatTeams(){}
-function switchChatTeam(){}
-function renderMessages(){}
-function sendFixedMessage(){}
-function sendMessage(){showToast('채팅 서비스는 제공되지 않습니다');}
-window.loadChatTeams=loadChatTeams;window.switchChatTeam=switchChatTeam;
-window.renderMessages=renderMessages;window.sendFixedMessage=sendFixedMessage;
-window.sendMessage=sendMessage;
+async function loadChatTeams() {
+  const sel = document.getElementById('chat-team-select');
+  if (!sel) return;
+
+  const profile = state.profile;
+  if (!profile) {
+    sel.innerHTML = '<option value="">로그인이 필요합니다</option>';
+    return;
+  }
+
+  try {
+    // 내 팀 조회
+    const { data: myTeam } = await _sb
+      .from('teams').select('id').eq('leader_id', profile.id).single();
+
+    if (!myTeam) {
+      sel.innerHTML = '<option value="">등록된 팀이 없습니다</option>';
+      renderMessages();
+      return;
+    }
+
+    // 내 팀이 신청한 / 신청받은 match_requests 조회 (sent + received)
+    const col = profile.gender === 'male' ? 'male_team_id' : 'female_team_id';
+    const oppCol = profile.gender === 'male' ? 'female_team_id' : 'male_team_id';
+
+    const { data: reqs } = await _sb
+      .from('match_requests')
+      .select(`id, status, ${oppCol}`)
+      .eq(col, myTeam.id)
+      .in('status', ['pending', 'matched'])
+      .order('created_at', { ascending: false });
+
+    if (!reqs || reqs.length === 0) {
+      sel.innerHTML = '<option value="">신청/수신한 팀이 없습니다</option>';
+      renderMessages();
+      return;
+    }
+
+    // 상대팀 ID 목록
+    const oppTeamIds = [...new Set(reqs.map(r => r[oppCol]).filter(Boolean))];
+
+    // 상대팀 이름 조회
+    const { data: oppTeams } = await _sb
+      .from('teams').select('id, title, status').in('id', oppTeamIds);
+
+    const teamMap = {};
+    (oppTeams || []).forEach(t => { teamMap[t.id] = t; });
+
+    // 셀렉트 옵션 구성
+    sel.innerHTML = '<option value="">💌 대화할 팀을 선택하세요</option>';
+    reqs.forEach(r => {
+      const oppId = r[oppCol];
+      const t = teamMap[oppId];
+      if (!t) return;
+      const statusLabel = r.status === 'matched' ? '🎉 매칭완료' : '⏳ 검토중';
+      const opt = document.createElement('option');
+      opt.value = oppId;
+      opt.textContent = `${t.title} [${statusLabel}]`;
+      sel.appendChild(opt);
+    });
+
+    // 첫 번째 팀 자동 선택
+    if (oppTeamIds.length > 0) {
+      sel.value = oppTeamIds[0];
+      switchChatTeam(oppTeamIds[0]);
+    } else {
+      renderMessages();
+    }
+
+  } catch(e) {
+    console.warn('[loadChatTeams]', e.message);
+    sel.innerHTML = '<option value="">팀 목록 로드 실패</option>';
+  }
+}
+window.loadChatTeams = loadChatTeams;
+
+// 대화 상대팀 전환
+function switchChatTeam(teamId) {
+  _currentChatTeamId = teamId || null;
+
+  // 헤더 타이틀 업데이트
+  const sel = document.getElementById('chat-team-select');
+  const selected = sel?.options[sel.selectedIndex];
+  const header = document.querySelector('#screen-messages .header-title');
+  if (header) {
+    header.textContent = teamId && selected?.textContent
+      ? `💬 ${selected.textContent.split(' [')[0]}`
+      : '💬 매칭 채팅';
+  }
+
+  renderMessages();
+}
+window.switchChatTeam = switchChatTeam;
+
+function renderMessages() {
+  const container = document.getElementById('chat-messages');
+  if (!container) return;
+
+  const messages = _currentChatTeamId
+    ? (_teamMessages[_currentChatTeamId] || [])
+    : [];
+
+  if (!_currentChatTeamId) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:40px 20px;">
+        <div class="empty-icon">💬</div>
+        <div class="empty-title">대화할 팀을 선택해주세요</div>
+        <div class="empty-desc">위 드롭다운에서 신청한 팀을 선택하면 채팅이 시작됩니다</div>
+      </div>`;
+    return;
+  }
+
+  if (messages.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:40px 20px;">
+        <div class="empty-icon">💬</div>
+        <div class="empty-title">아직 메시지가 없어요</div>
+        <div class="empty-desc">아래 버튼으로 첫 메시지를 보내보세요!</div>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+  for (const m of messages) {
+    const group = document.createElement('div');
+    group.className = 'chat-group';
+    group.style.alignItems = m.mine ? 'flex-end' : 'flex-start';
+
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${m.mine ? 'mine' : 'theirs'}`;
+    bubble.textContent = m.text;
+
+    const time = document.createElement('div');
+    time.className = 'chat-time';
+    time.style.textAlign = m.mine ? 'right' : 'left';
+    time.style.padding = '0 4px';
+    time.textContent = m.time;
+
+    group.appendChild(bubble);
+    group.appendChild(time);
+    container.appendChild(group);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+window.renderMessages = renderMessages;
+
+function _buildTimeStr() {
+  const now = new Date();
+  const h  = now.getHours();
+  const mi = String(now.getMinutes()).padStart(2, '0');
+  return h >= 12 ? `오후 ${h - 12 || 12}:${mi}` : `오전 ${h}:${mi}`;
+}
+
+function sendFixedMessage(text) {
+  if (!state.profile) { showToast('로그인이 필요합니다'); return; }
+  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
+  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
+  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
+  renderMessages();
+}
+window.sendFixedMessage = sendFixedMessage;
+
+function sendMessage() {
+  if (!state.profile) { showToast('로그인이 필요합니다'); return; }
+  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
+  const input = document.getElementById('chat-input');
+  const text  = input?.value.trim();
+  if (!text) return;
+  if (text.length > 200) { showToast('메시지는 200자 이하로 입력해주세요'); return; }
+  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
+  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
+  input.value = '';
+  renderMessages();
+}
+window.sendMessage = sendMessage;
 
 // ============================================================
 // 26. 마이페이지 상태 업데이트
@@ -2206,8 +2503,8 @@ async function updateMyPageStatus() {
 
   try {
     const [{ data: verif }, { data: deposit }] = await Promise.all([
-      _sb.from('student_verifications').select('status').eq('user_id', profile.id).maybeSingle(),
-      _sb.from('deposits').select('status').eq('user_id', profile.id).maybeSingle()
+      _sb.from('student_verifications').select('status').eq('user_id', profile.id).single(),
+      _sb.from('deposits').select('status').eq('user_id', profile.id).single()
     ]);
 
     const V_LABEL = { pending:'⏳ 검토중', approved:'✅ 승인', rejected:'❌ 반려' };
@@ -2266,7 +2563,7 @@ async function confirmDeleteMyTeam() {
     .from('teams')
     .select('id, title, status')
     .eq('leader_id', profile.id)
-    .maybeSingle();
+    .single();
 
   if (!myTeam) {
     showToast('등록된 팀이 없습니다');
@@ -2380,11 +2677,6 @@ function assertAdmin() {
     showToast('❌ 관리자 권한이 필요합니다');
     throw new Error('UNAUTHORIZED');
   }
-}
-async function assertAdminDB() {
-  if (state.profile?.role !== 'admin') { showToast('❌ 관리자 권한이 필요합니다'); throw new Error('UNAUTHORIZED'); }
-  const {data} = await _sb.from('users').select('role').eq('id', state.profile.id).maybeSingle();
-  if (data?.role !== 'admin') { showToast('❌ 관리자 권한 검증 실패'); throw new Error('UNAUTHORIZED_DB'); }
 }
 
 // 관리자 액션 로그 (DB 함수 호출)
@@ -2967,7 +3259,7 @@ async function openAdminUserDetail(userId) {
 
   const { data: u } = await _sb.from('users')
     .select('*, student_verifications!student_verifications_user_id_fkey(*), deposits!deposits_user_id_fkey(*)')
-    .eq('id', userId).maybeSingle();
+    .eq('id', userId).single();
   if (!u) return;
 
   const v   = u.student_verifications?.[0] || {};
@@ -3043,8 +3335,8 @@ async function openAdminUserDetail(userId) {
         color:var(--gray-600);">👥 등록 팀</div>
       ${iRow('📛 팀 이름',    esc(myTeam.title||'-'))}
       ${iRow('📊 팀 상태',    {recruiting:'🟢 모집중',matched:'🎉 매칭완료',hidden:'⚫ 숨김'}[myTeam.status]||myTeam.status||'-')}
-      ${myTeam.contact_phone ? iRow('📸 인스타그램 ID', esc(myTeam.contact_phone)) : ''}
-      ${myTeam.contact_kakao ? iRow('💬 카카오톡 ID', esc(myTeam.contact_kakao)) : ''}
+      ${myTeam.contact_phone ? iRow('📞 팀 연락처', esc(myTeam.contact_phone)) : ''}
+      ${myTeam.contact_kakao ? iRow('💛 카카오 ID', esc(myTeam.contact_kakao)) : ''}
       ${iRow('📅 팀 등록일', myTeam.created_at ? new Date(myTeam.created_at).toLocaleDateString('ko-KR') : '-')}
     </div>` : ''}
 
@@ -3613,9 +3905,9 @@ window.toggleAll = toggleAll;
         매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">인스타그램 ID <span class="required">*</span></label>
-        <input class="form-input" type="text" id="contact-phone" style="height:48px;"
-          placeholder="인스타그램 아이디 (@제외)" maxlength="50" autocomplete="off">
+        <label class="form-label">전화번호</label>
+        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
+          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
       </div>
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
