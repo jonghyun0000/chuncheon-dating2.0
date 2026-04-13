@@ -33,8 +33,8 @@ window.__ENV__ = {
   BANK_HOLDER:       '이종현',
 
   // 이용료
-  FEE_MALE:          3000,
-  FEE_FEMALE:        1000,
+  FEE_MALE:          5000,  // 남성팀 3인 기준
+  FEE_FEMALE:        3000,  // 여성팀 3인 기준
 
   // 관리자 이메일 (환불 문의)
   ADMIN_EMAIL:       'john_1217@naver.com',
