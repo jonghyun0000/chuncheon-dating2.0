@@ -198,25 +198,14 @@ async function initApp() {
 }
 
 async function loadProfile(authUserId) {
-  // maybeSingle: 결과 없어도 에러 안 남 (single은 RLS 오류 시 throw)
-  let { data, error } = await _sb
+  const { data, error } = await _sb
     .from('users')
     .select('*')
     .eq('auth_id', authUserId)
     .is('deleted_at', null)
-    .maybeSingle();
+    .single();
 
-  // Auth 세션 동기화 지연 대응 — 최대 2회 재시도
-  if (!data && !error) {
-    for (let i = 0; i < 2; i++) {
-      await new Promise(r => setTimeout(r, 600));
-      const r2 = await _sb.from('users').select('*')
-        .eq('auth_id', authUserId).is('deleted_at', null).maybeSingle();
-      if (r2.data) { data = r2.data; break; }
-    }
-  }
-
-  if (!data) { state.profile = null; return null; }
+  if (error || !data) { state.profile = null; return null; }
   state.profile = data;
   return data;
 }
@@ -252,7 +241,7 @@ function enterAuthenticatedApp() {
 // 9. ★★★ 로그인 — 실제 Supabase Auth 검증 (가짜 로그인 완전 제거) ★★★
 // ============================================================
 async function doLogin() {
-  const usernameRaw = document.getElementById('login-id')?.value.trim().toLowerCase();
+  const usernameRaw = document.getElementById('login-id')?.value.trim();
   const password    = document.getElementById('login-pw')?.value;
 
   // 클라이언트 사전 검증
@@ -857,8 +846,8 @@ async function goToVerification() {
     showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
-  if (!phoneNum || phoneNum.trim().length < 2) {
-    showToast('카카오톡 ID를 입력해주세요 (영문·숫자 2자 이상)'); return;
+  if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호를 올바르게 입력해주세요 (예: 010-0000-0000)'); return;
   }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
@@ -1027,8 +1016,6 @@ async function submitVerification() {
     } else {
       // ★ phone_number는 users 테이블에 컬럼이 없을 수 있으므로
       //   payload를 동적으로 구성해 컬럼이 있을 때만 포함
-      // ★ INSERT는 최소 컬럼만 — phone_number/custom_badge는 후속 UPDATE로
-      //   (42P17 재귀 방지: RLS 정책이 users를 다시 참조하는 것 차단)
       const insertPayload = {
         auth_id:         signUpUid,
         username:        d.username,
@@ -1045,30 +1032,26 @@ async function submitVerification() {
         marketing_agree: d.marketing_agree,
         profile_active:  false
       };
+      // phone_number 컬럼이 DB에 추가된 경우에만 포함
+      if (d.phone_number) insertPayload.phone_number = d.phone_number;
+      // custom_badge 컬럼이 DB에 있는 경우에만 포함 (없으면 무시)
+      if (d.custom_badge) insertPayload.custom_badge = d.custom_badge;
 
       let newP, profileErr;
-      ({ data: newP, error: profileErr } = await _sb
-        .from('users').insert(insertPayload).select().maybeSingle());
+      ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
 
-      // INSERT 실패 시 재시도 (schema cache 오류 등)
-      if (profileErr) {
-        console.warn('[SV] INSERT 재시도:', profileErr.message);
-        await new Promise(r => setTimeout(r, 500));
-        ({ data: newP, error: profileErr } = await _sb
-          .from('users').insert(insertPayload).select().maybeSingle());
-      }
+      // ★ 컬럼 없음(PGRST204) 또는 schema cache 오류 → 선택 컬럼 제거 후 재시도
+      const isMissingCol = (e) =>
+        e?.code === 'PGRST204' ||
+        e?.message?.includes('schema cache') ||
+        e?.message?.includes('Could not find');
 
-      // INSERT 성공 후 선택 컬럼 UPDATE (42P17 우회)
-      if (!profileErr && newP) {
-        const extraUpdate = {};
-        if (d.phone_number) extraUpdate.phone_number = d.phone_number;
-        if (d.custom_badge) extraUpdate.custom_badge  = d.custom_badge;
-        if (Object.keys(extraUpdate).length > 0) {
-          const { error: updErr } = await _sb.from('users')
-            .update(extraUpdate).eq('id', newP.id);
-          if (updErr) console.warn('[SV] 선택컬럼 UPDATE 실패(무시):', updErr.message);
-          else Object.assign(newP, extraUpdate);
-        }
+      if (profileErr && isMissingCol(profileErr)) {
+        console.warn('[SV] 선택 컬럼 오류, 필수 컬럼만으로 재시도:', profileErr.message);
+        // custom_badge, phone_number 제거 후 재시도
+        delete insertPayload.custom_badge;
+        delete insertPayload.phone_number;
+        ({ data: newP, error: profileErr } = await _sb.from('users').insert(insertPayload).select().single());
       }
 
       if (profileErr) {
@@ -1171,7 +1154,7 @@ async function submitVerification() {
     }
 
     // ── STEP 6: deposits 초기 레코드 (이미 있으면 무시 — .catch() 금지)
-    const fee = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
+    const fee = profile.gender === 'female' ? (cfg.FEE_FEMALE || 1000) : (cfg.FEE_MALE || 3000);
     const { error: depositErr } = await _sb.from('deposits').insert({
       user_id: profile.id, depositor_name: profile.nickname,
       amount: fee, status: 'pending_confirm'
@@ -1206,20 +1189,27 @@ async function submitDeposit() {
   const name = document.getElementById('depositor-name')?.value.trim();
   if (!name || name.length < 2) { showToast('입금자명을 정확히 입력해주세요'); return; }
 
-  const amount = profile.gender === 'female' ? cfg.FEE_FEMALE : cfg.FEE_MALE;
+  const amount = profile.gender === 'female' ? (cfg.FEE_FEMALE || 1000) : (cfg.FEE_MALE || 3000);
 
   setBtnLoading('btn-deposit', true, '입금 완료했습니다 ✓');
   try {
-    const { error } = await _sb.from('deposits').upsert(
-      { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' },
-      { onConflict: 'user_id' }
+    // INSERT 시도 → 중복이면 UPDATE
+    let { error } = await _sb.from('deposits').insert(
+      { user_id: profile.id, depositor_name: name, amount, status: 'pending_confirm' }
     );
-    if (error) throw new Error('입금 신청 저장 실패 (RLS 정책 오류 — Supabase SQL Editor에서 deposits 테이블 INSERT 정책을 확인하세요): ' + error.message);
-
+    if (error && (error.code === '23505' || error.message?.includes('duplicate'))) {
+      // 이미 있으면 UPDATE
+      const { error: updErr } = await _sb.from('deposits').update(
+        { depositor_name: name, amount, status: 'pending_confirm' }
+      ).eq('user_id', profile.id);
+      if (updErr) throw updErr;
+    } else if (error) {
+      throw error;
+    }
     showToast('💳 입금 신청 완료! 관리자 확인 후 서비스가 활성화됩니다');
     showScreen('screen-pending');
   } catch(err) {
-    showToast('❌ ' + err.message);
+    showToast('❌ 입금 신청 실패: ' + err.message);
   } finally {
     setBtnLoading('btn-deposit', false, '입금 완료했습니다 ✓');
   }
@@ -1604,13 +1594,10 @@ async function registerTeam() {
   }
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
-  // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
-  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
-  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
-  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
-  if (!phoneNum || phoneNum.trim().length < 2) {
-    showToast('카카오톡 ID를 입력해주세요 (2자 이상)'); return;
-  }
+  // ── 연락처 수집 (인스타그램 ID 필수)
+  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;  // 인스타ID
+  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;  // 추가 연락처
+  if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
@@ -3908,19 +3895,19 @@ window.toggleAll = toggleAll;
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
     <!-- 연락처 섹션 -->
     <div class="card card-p" style="margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📸 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
+        매칭 성사 시 상대팀에게만 공개됩니다. 인스타그램 ID는 필수입니다.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">전화번호</label>
-        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
-          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
+        <label class="form-label">인스타그램 ID <span class="required">*</span></label>
+        <input class="form-input" type="text" id="contact-phone" style="height:48px;"
+          placeholder="인스타그램 아이디 (@제외)" maxlength="50" autocomplete="off" inputmode="text">
       </div>
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
         <input class="form-input" type="text" id="contact-kakao" style="height:48px;"
-          placeholder="카카오톡 아이디 입력" maxlength="50" autocomplete="off">
+          placeholder="카카오톡 아이디 (선택)" maxlength="50" autocomplete="off">
       </div>
     </div>
 
