@@ -846,8 +846,8 @@ async function goToVerification() {
     showToast('출생연도를 다시 확인해주세요 (1980년 이후~2007년생까지 가입 가능)'); return;
   }
   if (!nickname || nickname.length < 2)  { showToast('닉네임은 2자 이상이어야 합니다'); return; }
-  if (!phoneNum || !/^[a-zA-Z0-9._]{2,50}$/.test(phoneNum)) {
-    showToast('카카오톡 ID를 입력해주세요 (영문·숫자 2자 이상)'); return;
+  if (!phoneNum || !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호를 올바르게 입력해주세요 (예: 010-0000-0000)'); return;
   }
 
   // ── 아이디 중복 확인 (DB 재확인 — silent 모드로 호출, 결과는 토스트로 표시)
@@ -1543,7 +1543,7 @@ async function openTeamDetail(teamId) {
 window.openTeamDetail = openTeamDetail;
 
 // ============================================================
-// 22. 팀 등록 — 인증 선택사항, 전화번호만, 인증완료 팀 상단 노출
+// 22. 팀 등록 — 인스타그램ID 필수, 카카오ID 선택, 인증완료 팀 상단 노출
 // ============================================================
 async function registerTeam() {
   const profile = state.profile;
@@ -1588,8 +1588,8 @@ async function registerTeam() {
   if (members.length === 0) { showToast('최소 1명의 팀원 정보를 입력해주세요'); return; }
 
   // ── 연락처 수집 (인스타그램 ID 필수, 카카오 ID 선택)
-  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;  // 인스타ID
-  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;  // 카카오ID
+  const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
+  const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
   if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
 
   // ── 인증 여부
@@ -1919,13 +1919,10 @@ async function submitApply() {
     const insertData = { status: 'pending', created_at: new Date().toISOString() };
     if (message) insertData.message = message;
 
-    if (profile.gender === 'male') {
-      insertData.male_team_id   = myTeam.id;
-      insertData.female_team_id = targetTeamId;
-    } else {
-      insertData.female_team_id = myTeam.id;
-      insertData.male_team_id   = targetTeamId;
-    }
+    // ★ 규칙: female_team_id=신청자, male_team_id=피신청자 (성별 무관)
+    // 보낸신청: female_team_id=내팀 / 받은신청: male_team_id=내팀
+    insertData.female_team_id = myTeam.id;
+    insertData.male_team_id   = targetTeamId;
 
     const { error } = await _sb.from('match_requests').insert(insertData);
 
@@ -1997,45 +1994,19 @@ async function loadAndRenderRequests(tab) {
     const profile = state.profile;
     const gender  = profile?.gender;
 
+    // ★ 규칙: female_team_id=신청자, male_team_id=피신청자 (성별 무관)
     if (tab === 'sent') {
-      // 내가 보낸 신청 = 내 팀이 신청자 측
-      // 여성팀이 남성팀에게 신청 → female_team_id = 내 팀
-      // 남성팀이 여성팀에게 신청 → male_team_id = 내 팀
-      if (gender === 'female') {
-        ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_male_team_id_fkey(title,university)')
-          .eq('female_team_id', myTeam.id)
-          .order('created_at', { ascending: false }));
-      } else {
-        ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
-          .eq('male_team_id', myTeam.id)
-          .order('created_at', { ascending: false }));
-      }
+      // 보낸신청 = 내가 신청자 = female_team_id가 내 팀
+      ({ data, error } = await _sb.from('match_requests')
+        .select('*, teams!match_requests_male_team_id_fkey(title,university)')
+        .eq('female_team_id', myTeam.id)
+        .order('created_at', { ascending: false }));
     } else {
-      // 받은 신청 = 상대팀이 내 팀에게 신청한 것 = 반대 컬럼이 내 팀
-      // 내가 남성팀 → 여성팀이 나에게 신청 → female_team_id는 상대, male_team_id = 내 팀
-      //   BUT: 이 경우 내가 보낸 것도 male_team_id=내팀이므로 구분 불가
-      //   → 실제 서비스 로직: 여성이 남성에게 신청하는 구조
-      //   → 남성 received = female_team_id = 상대가 신청자, male_team_id = 내팀
-      //   → 여성 received = 없음 (여성은 신청만 함)
-      if (gender === 'male') {
-        // 남성팀이 받은 신청 = 여성팀이 신청한 것 → male_team_id = 내팀
-        // sent랑 같은 조건이지만 received는 status=pending인 것만 (아직 처리 안 된 것)
-        // 단, sent에서 이미 보여주므로 received는 "상대방이 보낸 신청"
-        // → 현재 구조상 남성 received와 sent가 동일 → received 탭을 숨기거나 
-        //   "받은 신청" = 여성팀(상대)이 신청한 건 = male_team_id=내팀 + status=pending
-        ({ data, error } = await _sb.from('match_requests')
-          .select('*, teams!match_requests_female_team_id_fkey(title,university)')
-          .eq('male_team_id', myTeam.id)
-          .eq('status', 'pending')
-          .order('created_at', { ascending: false }));
-      } else {
-        // 여성팀이 받은 신청 = 없음 (여성이 신청하는 구조)
-        // 빈 배열 반환
-        data = [];
-        error = null;
-      }
+      // 받은신청 = 상대가 신청자 = male_team_id가 내 팀
+      ({ data, error } = await _sb.from('match_requests')
+        .select('*, teams!match_requests_female_team_id_fkey(title,university)')
+        .eq('male_team_id', myTeam.id)
+        .order('created_at', { ascending: false }));
     }
 
     if (error) throw error;
@@ -2227,54 +2198,54 @@ window.saveMatchContact = saveMatchContact;
 async function acceptMatchRequest(requestId) {
   if (!/^[0-9a-f-]{36}$/i.test(requestId)) return;
   try {
-    // match_request에서 상대팀 ID 먼저 파악 (업데이트 전에 읽기)
+    // STEP1: 양쪽 팀 ID 파악 (maybeSingle — single은 실패 시 throw)
     const { data: reqBefore } = await _sb
       .from('match_requests')
       .select('male_team_id, female_team_id')
       .eq('id', requestId)
-      .single();
+      .maybeSingle();
 
-    // match_request 상태 → matched
+    if (!reqBefore?.male_team_id || !reqBefore?.female_team_id) {
+      showToast('❌ 신청 정보를 찾을 수 없습니다.'); return;
+    }
+
+    const maleTeamId   = reqBefore.male_team_id;
+    const femaleTeamId = reqBefore.female_team_id;
+
+    // STEP2: 연락처 먼저 조회 (status 변경 전 — 변경 후엔 RLS에 막힘)
+    const { data: myTeam } = await _sb.from('teams').select('id')
+      .eq('leader_id', state.profile?.id)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+
+    const opponentTeamId = myTeam?.id === maleTeamId ? femaleTeamId : maleTeamId;
+
+    let preloaded = null;
+    if (opponentTeamId) {
+      const { data: oppTeam } = await _sb.from('teams')
+        .select('title, contact_phone, contact_kakao, leader_id')
+        .eq('id', opponentTeamId).maybeSingle();
+      if (oppTeam) {
+        let phone = oppTeam.contact_phone || '';
+        if (!phone && oppTeam.leader_id) {
+          const { data: leader } = await _sb.from('users')
+            .select('phone_number').eq('id', oppTeam.leader_id).maybeSingle();
+          if (leader?.phone_number) phone = leader.phone_number;
+        }
+        preloaded = { teamName: oppTeam.title, phone, kakao: oppTeam.contact_kakao };
+      }
+    }
+
+    // STEP3: match_request → matched
     const { error: reqErr } = await _sb.from('match_requests').update({
       status: 'matched', responded_at: new Date().toISOString()
     }).eq('id', requestId);
     if (reqErr) throw reqErr;
 
-    // 내 팀 파악
-    const { data: myTeam } = await _sb
-      .from('teams').select('id').eq('leader_id', state.profile?.id).single();
-
-    // 상대팀 ID 결정
-    let opponentTeamId = null;
-    if (reqBefore && myTeam) {
-      opponentTeamId = myTeam.id === reqBefore.male_team_id
-        ? reqBefore.female_team_id
-        : reqBefore.male_team_id;
-    }
-
-    // 상대팀 연락처 미리 조회 (contact_kakao 포함)
-    let preloaded = null;
-    if (opponentTeamId) {
-      const { data: oppTeam } = await _sb
-        .from('teams')
-        .select('title, contact_phone, contact_kakao')
-        .eq('id', opponentTeamId)
-        .single();
-      if (oppTeam) {
-        preloaded = { teamName: oppTeam.title, phone: oppTeam.contact_phone, kakao: oppTeam.contact_kakao };
-      }
-    }
-
-    // 양쪽 팀 status → matched, is_visible → false
-    const teamIds = [reqBefore?.male_team_id, reqBefore?.female_team_id].filter(Boolean);
-    if (teamIds.length > 0) {
-      await _sb.from('teams')
-        .update({ status: 'matched', is_visible: false })
-        .in('id', teamIds);
-    }
+    // STEP4: ★ 양쪽 팀 각각 개별 UPDATE (in()은 RLS에서 일부만 적용될 수 있음)
+    await _sb.from('teams').update({ status: 'matched', is_visible: false }).eq('id', maleTeamId);
+    await _sb.from('teams').update({ status: 'matched', is_visible: false }).eq('id', femaleTeamId);
 
     showToast('🎉 수락했습니다! 매칭이 성사되었어요');
-    // 미리 조회한 데이터를 직접 전달 → RLS 우회
     await showMatchSuccess(requestId, preloaded);
     updateHomeStats();
   } catch(err) {
@@ -3296,7 +3267,7 @@ async function openAdminUserDetail(userId) {
       <div style="padding:10px 14px;background:var(--navy);font-size:12px;font-weight:700;
         color:rgba(255,255,255,0.85);">🔐 개인정보 (관리자 전용)</div>
       ${iRow('🆔 학번',      esc(u.student_number||'-'))}
-      ${iRow('📞 전화번호',  esc(u.phone_number||'-'))}
+      ${iRow('💬 카카오톡 ID (가입)', esc(u.phone_number||'-'))}
       ${iRow('📅 가입일',    u.created_at ? new Date(u.created_at).toLocaleString('ko-KR') : '-')}
       ${iRow('🔑 Auth UID',  `<span style="font-size:10px;word-break:break-all;">${esc(u.auth_id||'-')}</span>`)}
       ${iRow('📢 마케팅 동의', u.marketing_agree ? '✅ 동의' : '❌ 미동의')}
@@ -3323,8 +3294,8 @@ async function openAdminUserDetail(userId) {
         color:var(--gray-600);">👥 등록 팀</div>
       ${iRow('📛 팀 이름',    esc(myTeam.title||'-'))}
       ${iRow('📊 팀 상태',    {recruiting:'🟢 모집중',matched:'🎉 매칭완료',hidden:'⚫ 숨김'}[myTeam.status]||myTeam.status||'-')}
-      ${myTeam.contact_phone ? iRow('📞 팀 연락처', esc(myTeam.contact_phone)) : ''}
-      ${myTeam.contact_kakao ? iRow('💛 카카오 ID', esc(myTeam.contact_kakao)) : ''}
+      ${myTeam.contact_phone ? iRow('📸 인스타그램 ID', esc(myTeam.contact_phone)) : ''}
+      ${myTeam.contact_kakao ? iRow('💬 카카오톡 ID', esc(myTeam.contact_kakao)) : ''}
       ${iRow('📅 팀 등록일', myTeam.created_at ? new Date(myTeam.created_at).toLocaleDateString('ko-KR') : '-')}
     </div>` : ''}
 
@@ -3893,9 +3864,9 @@ window.toggleAll = toggleAll;
         매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">전화번호</label>
-        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
-          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
+        <label class="form-label">인스타그램 ID <span class="required">*</span></label>
+        <input class="form-input" type="text" id="contact-phone" style="height:48px;"
+          placeholder="인스타그램 아이디 (@제외)" maxlength="50" autocomplete="off" inputmode="text">
       </div>
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
