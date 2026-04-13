@@ -954,7 +954,7 @@
         </div>
         <div class="feature-row">
           <span class="feature-icon">💬</span>
-          <span class="feature-text">매칭 전 익명 채팅 — 안전하게</span>
+          <span class="feature-text">매칭 성사 시 인스타 + 카카오 연락처 공개</span>
         </div>
       </div>
 
@@ -968,7 +968,7 @@
           </div>
           <div style="display:flex;align-items:center;gap:12px;background:white;border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--gray-100);">
             <div style="width:28px;height:28px;background:var(--pink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;font-weight:700;flex-shrink:0;">2</div>
-            <div><p style="font-size:13px;font-weight:700;margin-bottom:1px;">이용료 입금</p><p style="font-size:11px;color:var(--gray-500);">남성 3,000원 · 여성 1,000원</p></div>
+            <div><p style="font-size:13px;font-weight:700;margin-bottom:1px;">이용료 입금 (등록당)</p><p style="font-size:11px;color:var(--gray-500);">남성 3,000원 · 여성 1,000원</p></div>
           </div>
           <div style="display:flex;align-items:center;gap:12px;background:white;border-radius:var(--radius-sm);padding:12px 14px;border:1px solid var(--gray-100);">
             <div style="width:28px;height:28px;background:var(--pink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;font-weight:700;flex-shrink:0;">3</div>
@@ -1131,8 +1131,8 @@
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">전화번호 <span class="required">*</span></label>
-        <input class="form-input" id="reg-phone" type="tel" placeholder="010-0000-0000" maxlength="15" autocomplete="tel">
+        <label class="form-label">카카오톡 ID <span class="required">*</span></label>
+        <input class="form-input" id="reg-phone" type="text" placeholder="카카오톡 아이디 (영문·숫자)" maxlength="50" autocomplete="off" inputmode="text">
       </div>
       <div class="form-group">
         <label class="form-label">자기소개</label>
@@ -1210,7 +1210,7 @@
     <div class="progress-steps">
       <div class="step done"><div class="step-circle">✓</div><span class="step-label">기본정보</span></div>
       <div class="step active"><div class="step-circle">2</div><span class="step-label">학생인증</span></div>
-      <div class="step"><div class="step-circle">3</div><span class="step-label">입금</span></div>
+      <div class="step"><div class="step-circle">3</div><span class="step-label">검토</span></div>
     </div>
     <div class="scroll-content" style="padding:0 20px 24px;">
       <div style="margin-bottom:20px;">
@@ -1269,11 +1269,11 @@
             ✅ 학생증 업로드 완료<br>
             ⏳ 관리자 검토 중<br>
             ⬜ 인증 승인<br>
-            ⬜ 입금 완료<br>
+
             ⬜ 서비스 시작
           </p>
         </div>
-        <button class="btn btn-secondary" onclick="showScreen('screen-deposit')">입금 먼저 하기</button>
+        
         <button class="btn btn-ghost" style="margin-top:8px;color:var(--purple);" onclick="showScreen('screen-preview')">👀 미리보기로 둘러보기</button>
       </div>
 
@@ -1299,7 +1299,7 @@
     <div class="progress-steps">
       <div class="step done"><div class="step-circle">✓</div><span class="step-label">기본정보</span></div>
       <div class="step done"><div class="step-circle">✓</div><span class="step-label">학생인증</span></div>
-      <div class="step active"><div class="step-circle">3</div><span class="step-label">입금</span></div>
+      <div class="step active"><div class="step-circle">3</div><span class="step-label">검토</span></div>
     </div>
     <div class="scroll-content" style="padding:0 20px 24px;">
       <div class="deposit-account-card">
@@ -1472,7 +1472,7 @@
           if (pg === 'female' && tg !== 'male') { showToast('❌ 여성 회원은 남성팀에만 신청할 수 있습니다.'); return; }
           openApplyScreen(window._currentDetailTeamId);
         ">💌 과팅 신청하기</button>
-        <button class="btn btn-outline" onclick="state.profile ? showToast('💬 메시지를 보내기 전 신청을 먼저 해주세요') : showAuthGateModal('message')">💬 채팅 먼저 하기</button>
+
       </div>
     </div>
   </div>
@@ -1611,14 +1611,14 @@
         <div class="card card-p" style="margin-bottom:20px;text-align:left;">
           <p style="font-size:13px;font-weight:700;color:var(--gray-700);margin-bottom:12px;">📞 상대팀 연락처</p>
           <div style="background:#F1F8E9;border:1px solid #A5D6A7;border-radius:var(--radius-sm);padding:14px;margin-bottom:10px;">
-            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">📱 전화번호</p>
+            <p style="font-size:12px;color:#388E3C;margin-bottom:6px;font-weight:600;">📸 인스타그램 ID</p>
             <p id="match-contact-phone"
               style="font-size:20px;font-weight:700;color:#1B5E20;letter-spacing:0.05em;">
               —
             </p>
           </div>
           <div style="background:#FFF8E1;border:1px solid #FFE082;border-radius:var(--radius-sm);padding:14px;margin-bottom:12px;">
-            <p style="font-size:12px;color:#F57F17;margin-bottom:6px;font-weight:600;">💛 카카오톡 ID</p>
+            <p style="font-size:12px;color:#F57F17;margin-bottom:6px;font-weight:600;">💬 카카오톡 ID</p>
             <p id="match-contact-kakao"
               style="font-size:18px;font-weight:700;color:#E65100;letter-spacing:0.03em;">
               —
@@ -1923,7 +1923,7 @@
         <div style="background:var(--gray-50);border:1px solid var(--gray-200);
           border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;text-align:left;">
           <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px;">신고 접수 이메일</div>
-          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="bcd6d3d4d2e38d8e8d8bfcd2ddcad9ce92dfd3d1">[email&#160;protected]</a></div>
+          <div style="font-size:16px;font-weight:700;color:var(--pink);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="c0aaafa8ae9ff1f2f1f780aea1b6a5b2eea3afad">[email&#160;protected]</a></div>
           <div style="font-size:12px;color:var(--gray-400);margin-top:6px;line-height:1.6;">
             • 신고 유형 (허위 프로필 / 욕설 / 성희롱 / 기타)<br>
             • 신고 내용을 상세히 작성해 보내주세요<br>
