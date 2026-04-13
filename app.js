@@ -151,7 +151,7 @@ function showAuthGateModal(action) {
     apply:   { emoji:'💌', title:'과팅 신청은 회원만',   desc:'가입하고 마음에 드는 팀에게 신청해보세요!' },
     team:    { emoji:'👥', title:'팀 등록은 회원만',     desc:'가입 후 인증을 완료하면 팀을 등록할 수 있어요.' },
     request: { emoji:'📬', title:'신청 내역은 회원만',   desc:'가입하면 보낸·받은 신청을 확인할 수 있어요.' },
-    message: { emoji:'💬', title:'후기는 회원만',        desc:'가입하고 과팅 후기를 작성해보세요!' },
+    message: { emoji:'💬', title:'채팅은 회원만',       desc:'가입하고 매칭된 팀과 안전하게 대화해보세요!' },
     mypage:  { emoji:'👤', title:'마이페이지는 회원만',  desc:'가입하면 내 정보와 매칭 현황을 확인할 수 있어요.' },
     default: { emoji:'🌸', title:'회원 전용 기능',      desc:'가입하고 모든 기능을 이용해보세요!' }
   };
@@ -1590,8 +1590,10 @@ async function registerTeam() {
   // ── 연락처 수집 (전화번호 필수, 카카오 ID 선택)
   const phoneNum  = document.getElementById('contact-phone')?.value.trim() || null;
   const kakaoId   = document.getElementById('contact-kakao')?.value.trim() || null;
-  if (!phoneNum) { showToast('인스타그램 ID를 입력해주세요'); return; }
-
+  if (!phoneNum && !kakaoId) { showToast('전화번호 또는 카카오 ID 중 하나는 필수입니다'); return; }
+  if (phoneNum && !/^[0-9\-+\s]{9,15}$/.test(phoneNum)) {
+    showToast('전화번호 형식이 올바르지 않습니다 (숫자·하이픈만, 9~15자)'); return;
+  }
 
   // ── 인증 여부
   const isVerified = !!profile.profile_active;
@@ -1802,12 +1804,18 @@ async function openApplyScreen(teamId) {
     const { data: myTeam, error } = await _sb.from('teams')
       .select('*, team_members(*)')
       .eq('leader_id', state.profile.id)
-      .single();
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (error || !myTeam) {
+    if (error) {
+      if (preview) preview.innerHTML = `<div style="color:var(--error);font-size:13px;text-align:center;padding:12px;">오류: ${esc(error.message)}</div>`;
+      return;
+    }
+
+    if (!myTeam) {
       if (preview)  preview.innerHTML = '';
       if (noBanner) noBanner.style.display = 'block';
-      // 신청 버튼 숨김 확실히
       if (submitBtn) submitBtn.style.display = 'none';
       return;
     }
@@ -1904,11 +1912,12 @@ async function submitApply() {
     const { data: myTeam, error: teamErr } = await _sb.from('teams')
       .select('id')
       .eq('leader_id', profile.id)
-      .single();
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (teamErr || !myTeam) {
-      showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.'); return;
-    }
+    if (teamErr) { showToast('❌ 팀 조회 오류: ' + teamErr.message); return; }
+    if (!myTeam) { showToast('❌ 등록된 팀이 없습니다. 팀 등록 탭에서 팀을 먼저 등록해주세요.'); return; }
 
     // 자기 팀에는 신청 불가
     if (myTeam.id === targetTeamId) {
@@ -2121,7 +2130,7 @@ async function showMatchSuccess(requestId, preloadedData) {
     if (phoneEl) phoneEl.textContent = preloadedData.phone || '미등록';
     const kakaoEl = document.getElementById('match-contact-kakao');
     if (kakaoEl) kakaoEl.textContent = preloadedData.kakao || '미등록';
-    window._matchContactInsta = preloadedData.phone || '';  // 인스타ID
+    window._matchContactPhone = preloadedData.phone || '';
     window._matchContactKakao = preloadedData.kakao || '';
     window._matchContactName  = preloadedData.teamName || '상대팀';
     return;
@@ -2199,7 +2208,7 @@ async function _fetchAndShowOpponentTeam(opponentTeamId) {
 
 // 연락처 저장 (vCard 다운로드)
 function saveMatchContact() {
-  const phone = (window._matchContactInsta || window._matchContactPhone || '').trim();
+  const phone = (window._matchContactPhone || '').trim();
   const kakao = (window._matchContactKakao || '').trim();
   const name  = (window._matchContactName  || '상대팀').trim();
   if (!phone && !kakao) { showToast('저장할 연락처가 없습니다.'); return; }
@@ -2307,17 +2316,181 @@ const _teamMessages = {};
 let _currentChatTeamId = null;
 
 // 메시지 탭 진입 시 신청한 팀 목록 로드
-// 채팅 기능 제거됨 — stub 유지 (하위 호환)
-function loadChatTeams() {}
-function switchChatTeam() {}
-function renderMessages() {}
-function sendFixedMessage() {}
-function sendMessage() { showToast('채팅 서비스는 제공되지 않습니다'); }
-window.loadChatTeams  = loadChatTeams;
+async function loadChatTeams() {
+  const sel = document.getElementById('chat-team-select');
+  if (!sel) return;
+
+  const profile = state.profile;
+  if (!profile) {
+    sel.innerHTML = '<option value="">로그인이 필요합니다</option>';
+    return;
+  }
+
+  try {
+    // 내 팀 조회
+    const { data: myTeam } = await _sb
+      .from('teams').select('id').eq('leader_id', profile.id).single();
+
+    if (!myTeam) {
+      sel.innerHTML = '<option value="">등록된 팀이 없습니다</option>';
+      renderMessages();
+      return;
+    }
+
+    // 내 팀이 신청한 / 신청받은 match_requests 조회 (sent + received)
+    const col = profile.gender === 'male' ? 'male_team_id' : 'female_team_id';
+    const oppCol = profile.gender === 'male' ? 'female_team_id' : 'male_team_id';
+
+    const { data: reqs } = await _sb
+      .from('match_requests')
+      .select(`id, status, ${oppCol}`)
+      .eq(col, myTeam.id)
+      .in('status', ['pending', 'matched'])
+      .order('created_at', { ascending: false });
+
+    if (!reqs || reqs.length === 0) {
+      sel.innerHTML = '<option value="">신청/수신한 팀이 없습니다</option>';
+      renderMessages();
+      return;
+    }
+
+    // 상대팀 ID 목록
+    const oppTeamIds = [...new Set(reqs.map(r => r[oppCol]).filter(Boolean))];
+
+    // 상대팀 이름 조회
+    const { data: oppTeams } = await _sb
+      .from('teams').select('id, title, status').in('id', oppTeamIds);
+
+    const teamMap = {};
+    (oppTeams || []).forEach(t => { teamMap[t.id] = t; });
+
+    // 셀렉트 옵션 구성
+    sel.innerHTML = '<option value="">💌 대화할 팀을 선택하세요</option>';
+    reqs.forEach(r => {
+      const oppId = r[oppCol];
+      const t = teamMap[oppId];
+      if (!t) return;
+      const statusLabel = r.status === 'matched' ? '🎉 매칭완료' : '⏳ 검토중';
+      const opt = document.createElement('option');
+      opt.value = oppId;
+      opt.textContent = `${t.title} [${statusLabel}]`;
+      sel.appendChild(opt);
+    });
+
+    // 첫 번째 팀 자동 선택
+    if (oppTeamIds.length > 0) {
+      sel.value = oppTeamIds[0];
+      switchChatTeam(oppTeamIds[0]);
+    } else {
+      renderMessages();
+    }
+
+  } catch(e) {
+    console.warn('[loadChatTeams]', e.message);
+    sel.innerHTML = '<option value="">팀 목록 로드 실패</option>';
+  }
+}
+window.loadChatTeams = loadChatTeams;
+
+// 대화 상대팀 전환
+function switchChatTeam(teamId) {
+  _currentChatTeamId = teamId || null;
+
+  // 헤더 타이틀 업데이트
+  const sel = document.getElementById('chat-team-select');
+  const selected = sel?.options[sel.selectedIndex];
+  const header = document.querySelector('#screen-messages .header-title');
+  if (header) {
+    header.textContent = teamId && selected?.textContent
+      ? `💬 ${selected.textContent.split(' [')[0]}`
+      : '💬 매칭 채팅';
+  }
+
+  renderMessages();
+}
 window.switchChatTeam = switchChatTeam;
+
+function renderMessages() {
+  const container = document.getElementById('chat-messages');
+  if (!container) return;
+
+  const messages = _currentChatTeamId
+    ? (_teamMessages[_currentChatTeamId] || [])
+    : [];
+
+  if (!_currentChatTeamId) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:40px 20px;">
+        <div class="empty-icon">💬</div>
+        <div class="empty-title">대화할 팀을 선택해주세요</div>
+        <div class="empty-desc">위 드롭다운에서 신청한 팀을 선택하면 채팅이 시작됩니다</div>
+      </div>`;
+    return;
+  }
+
+  if (messages.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:40px 20px;">
+        <div class="empty-icon">💬</div>
+        <div class="empty-title">아직 메시지가 없어요</div>
+        <div class="empty-desc">아래 버튼으로 첫 메시지를 보내보세요!</div>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+  for (const m of messages) {
+    const group = document.createElement('div');
+    group.className = 'chat-group';
+    group.style.alignItems = m.mine ? 'flex-end' : 'flex-start';
+
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${m.mine ? 'mine' : 'theirs'}`;
+    bubble.textContent = m.text;
+
+    const time = document.createElement('div');
+    time.className = 'chat-time';
+    time.style.textAlign = m.mine ? 'right' : 'left';
+    time.style.padding = '0 4px';
+    time.textContent = m.time;
+
+    group.appendChild(bubble);
+    group.appendChild(time);
+    container.appendChild(group);
+  }
+  container.scrollTop = container.scrollHeight;
+}
 window.renderMessages = renderMessages;
+
+function _buildTimeStr() {
+  const now = new Date();
+  const h  = now.getHours();
+  const mi = String(now.getMinutes()).padStart(2, '0');
+  return h >= 12 ? `오후 ${h - 12 || 12}:${mi}` : `오전 ${h}:${mi}`;
+}
+
+function sendFixedMessage(text) {
+  if (!state.profile) { showToast('로그인이 필요합니다'); return; }
+  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
+  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
+  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
+  renderMessages();
+}
 window.sendFixedMessage = sendFixedMessage;
-window.sendMessage    = sendMessage;
+
+function sendMessage() {
+  if (!state.profile) { showToast('로그인이 필요합니다'); return; }
+  if (!_currentChatTeamId) { showToast('먼저 대화할 팀을 선택해주세요'); return; }
+  const input = document.getElementById('chat-input');
+  const text  = input?.value.trim();
+  if (!text) return;
+  if (text.length > 200) { showToast('메시지는 200자 이하로 입력해주세요'); return; }
+  if (!_teamMessages[_currentChatTeamId]) _teamMessages[_currentChatTeamId] = [];
+  _teamMessages[_currentChatTeamId].push({ mine: true, text, time: _buildTimeStr() });
+  input.value = '';
+  renderMessages();
+}
+window.sendMessage = sendMessage;
 
 // ============================================================
 // 26. 마이페이지 상태 업데이트
@@ -3160,8 +3333,8 @@ async function openAdminUserDetail(userId) {
         color:var(--gray-600);">👥 등록 팀</div>
       ${iRow('📛 팀 이름',    esc(myTeam.title||'-'))}
       ${iRow('📊 팀 상태',    {recruiting:'🟢 모집중',matched:'🎉 매칭완료',hidden:'⚫ 숨김'}[myTeam.status]||myTeam.status||'-')}
-      ${myTeam.contact_phone ? iRow('📸 인스타그램 ID', esc(myTeam.contact_phone)) : ''}
-      ${myTeam.contact_kakao ? iRow('💬 카카오톡 ID', esc(myTeam.contact_kakao)) : ''}
+      ${myTeam.contact_phone ? iRow('📞 팀 연락처', esc(myTeam.contact_phone)) : ''}
+      ${myTeam.contact_kakao ? iRow('💛 카카오 ID', esc(myTeam.contact_kakao)) : ''}
       ${iRow('📅 팀 등록일', myTeam.created_at ? new Date(myTeam.created_at).toLocaleDateString('ko-KR') : '-')}
     </div>` : ''}
 
@@ -3725,19 +3898,19 @@ window.toggleAll = toggleAll;
   container.innerHTML = [1, 2, 3].map(memberCard).join('') + `
     <!-- 연락처 섹션 -->
     <div class="card card-p" style="margin-bottom:12px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📸 연락처</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">📞 연락처</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px;">
-        매칭 성사 시 상대팀에게만 공개됩니다. 인스타그램 ID는 필수입니다.
+        매칭 성사 시 상대팀에게만 공개됩니다. 하나 이상 입력해주세요.
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label">인스타그램 ID <span class="required">*</span></label>
-        <input class="form-input" type="text" id="contact-phone" style="height:48px;"
-          placeholder="인스타그램 아이디 (@제외)" maxlength="50" autocomplete="off" inputmode="text">
+        <label class="form-label">전화번호</label>
+        <input class="form-input" type="tel" id="contact-phone" style="height:48px;"
+          placeholder="010-0000-0000" maxlength="15" autocomplete="off">
       </div>
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label">카카오톡 ID <span style="font-size:11px;color:var(--gray-400);font-weight:400;">(선택)</span></label>
         <input class="form-input" type="text" id="contact-kakao" style="height:48px;"
-          placeholder="카카오톡 아이디 (선택)" maxlength="50" autocomplete="off">
+          placeholder="카카오톡 아이디 입력" maxlength="50" autocomplete="off">
       </div>
     </div>
 
